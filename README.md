@@ -112,39 +112,306 @@ homeLibrary/
 └── README.md
 ```
 
-## 运行方式
+## 运行与调试
 
-### Xcode
+### 先知道当前工程的调试策略
 
-1. 打开 `homeLibrary.xcodeproj`
-2. 选择 `homeLibrary` scheme
-3. 选择运行目标：
-   - `iPhone / iPad Simulator`
-   - `iPhone / iPad` 真机
-   - `My Mac`
-4. 点击 `Run`
+当前工程已经按“本地开发优先，云同步单独验证”拆开了：
 
-### 个人团队先做本地测试
+- `Debug`：不带 `homeLibrary.entitlements`，可以直接做本地开发和真机调试
+- `Release`：保留 iCloud entitlement，用于真实 iCloud 同步验证和后续 TestFlight 分发
 
-如果 Xcode 提示：
+所以如果你现在看到：
 
 ```text
 Personal development teams do not support the iCloud capability
 ```
 
-说明当前签名团队还不能给这个 bundle 开出带 iCloud entitlement 的开发描述文件。项目已经改成：
+不要继续在 `Debug` 下验证 iCloud。当前正确做法是：
 
-- `Debug`：不再附带 `homeLibrary.entitlements`，可先测试本地功能
-- `Release`：继续保留 iCloud entitlement，用于后续真实云同步验证或正式分发
+1. 日常开发先用 `Debug`
+2. 本地功能在 simulator / 真机先跑通
+3. 等 Apple Developer Program 订阅生效后，再切到 `Release` 验证真实云同步
 
-也就是说，你现在可以直接用下面两种方式先开发和验收：
+### 日常开发：用 Simulator 跑 `Debug`
 
-1. 运行到 `iPhone Simulator`
-2. 用个人团队把 `Debug` 装到自己的真机
+这是最快、最稳定的开发方式。
 
-这时应用会正常使用本地书库；因为没有 iCloud entitlement，同步状态会显示为未开启，这是预期行为。
+1. 打开 `homeLibrary.xcodeproj`
+2. 选择 `homeLibrary` scheme
+3. 确认 `Run` 用的是 `Debug`
+4. 运行目标选一个 iPhone / iPad Simulator
+5. 点击 `Run`
 
-等 Apple Developer Program 审核通过后，再用 `Release` 或重新开启 iCloud capability 去验证真实 iCloud 同步。
+推荐先验证这些本地功能：
+
+- 启动是否正常
+- 搜索、筛选
+- 新增书籍
+- 编辑书籍
+- 删除书籍
+- 封面选择与展示
+- ISBN 自动补全
+
+在这条路径下，应用会使用本地书库；同步状态显示为“同步未开启”是预期行为，不是 bug。
+
+### `Debug` 时建议怎么查问题
+
+如果你在本地调试中遇到异常，建议按这个顺序处理：
+
+1. 先看 Xcode 的 `Issue navigator`，确认是编译错误、签名错误，还是运行时错误
+2. 再看 Xcode 底部调试区输出，确认是不是文件访问、网络请求或 SwiftUI 状态更新问题
+3. 如果界面状态不对，先在 app 里点一次刷新按钮
+4. 如果本地数据看起来脏了，删除 simulator 里的 app 后重新运行
+5. 如果编译缓存异常，执行 `Product > Clean Build Folder`
+
+### 调试时隔离数据（可选）
+
+如果你不想让不同调试会话共用同一份数据，可以在：
+
+`Product > Scheme > Edit Scheme > Run > Arguments > Environment Variables`
+
+里设置这些环境变量：
+
+- `HOME_LIBRARY_STORAGE_NAMESPACE=simulator-debug`
+- `HOME_LIBRARY_DISABLE_BUNDLED_SEED=1`
+- `HOME_LIBRARY_DISABLE_CLOUD_SYNC=1`
+
+含义：
+
+- `HOME_LIBRARY_STORAGE_NAMESPACE`：给当前调试会话单独开一份本地数据目录
+- `HOME_LIBRARY_DISABLE_BUNDLED_SEED=1`：不要自动导入 `SeedBooks.json`
+- `HOME_LIBRARY_DISABLE_CLOUD_SYNC=1`：强制只走本地模式
+
+## 真机本地调试
+
+### 在个人团队下把 app 跑到你自己的 iPhone / iPad
+
+即使 Apple Developer Program 订阅还没通过，你也可以先把 `Debug` 装到自己的真机上测试本地功能。
+
+步骤：
+
+1. 在 Xcode 中打开 `Settings > Accounts`，确认已经登录你的 Apple ID
+2. 用数据线连接 iPhone / iPad，解锁设备，并在设备上点“信任这台电脑”
+3. 打开 target `homeLibrary` 的 `Signing & Capabilities`
+4. 勾选 `Automatically manage signing`
+5. `Team` 选择你当前的个人团队，例如 `Yu Wang`
+6. 如果 `Bundle Identifier` 冲突，就改成你自己唯一的一份，例如 `yu.homeLibrary.dev`
+7. 运行配置保持为 `Debug`
+8. 在顶部运行目标里选择你的真机
+9. 点击 `Run`
+
+第一次真机调试时，你可能还需要在设备上开启开发者模式；系统会提示你重启设备并确认。
+
+在这条路径下，真机上能测的是：
+
+- 列表、搜索、筛选
+- 新增 / 编辑 / 删除
+- 封面选择
+- ISBN 扫码
+- 本地持久化
+
+在这条路径下，真机上不能测的是：
+
+- “个人 iCloud” 容器同步
+
+因为当前工程故意把 iCloud entitlement 只保留在 `Release`。
+
+### 真机调试常见问题
+
+- 如果仍然报 iCloud provisioning profile 错误：
+  先确认你跑的是 `Debug`，不是 `Release`
+- 如果 Xcode 找不到设备：
+  重新插线、解锁手机，并确认设备已信任这台 Mac
+- 如果签名失败：
+  先检查 `Team`，再检查 `Bundle Identifier` 是否唯一
+- 如果安装过旧包、界面行为异常：
+  先删除设备上的旧 app，再重新运行
+
+## 开发者订阅通过后，如何测试真实云同步
+
+这里说的是：Apple Developer Program 订阅已经生效，并且 Xcode 可以为你的 bundle 正常生成带 iCloud capability 的描述文件。
+
+### 一次性准备
+
+1. 确认你的付费开发者订阅已经生效
+2. 在 Xcode 的 `Signing & Capabilities` 中继续使用自动签名
+3. `Team` 选择你的付费开发团队
+4. 确认 app 使用的 `Bundle Identifier` 是你团队名下可用的一项
+5. 确认 iCloud capability 没被删掉，`homeLibrary/homeLibrary.entitlements` 仍然存在
+
+### 当前工程怎么切到云同步调试
+
+因为当前工程只有 `Release` 保留 iCloud entitlement，所以要这样切：
+
+1. `Product > Scheme > Edit Scheme`
+2. 选中左侧 `Run`
+3. 把 `Build Configuration` 从 `Debug` 改成 `Release`
+4. 关闭窗口
+
+建议只在“验证真实云同步”时这样切；日常开发完成后，再切回 `Debug`。
+
+### 验证“个人 iCloud”同步
+
+最稳妥的验证方式是两台真实设备，或者一台 Mac 加一台真实 iPhone / iPad。
+
+前提：
+
+- 两台设备登录同一个 Apple ID
+- 两台设备都开启 iCloud Drive
+- 两台设备都安装同一版带 iCloud entitlement 的构建
+
+说明：
+
+- 不要用 simulator 作为“个人 iCloud 是否可用”的最终判断，真实验证请以真机 / `My Mac` 为准
+
+操作步骤：
+
+1. 在设备 A 上运行 `Release` 版本
+2. 在设备 B 上也运行同一版本
+3. 设备 A 新增一本书，确认保存成功
+4. 在设备 B 打开 app，或者点一次刷新按钮
+5. 确认设备 B 收到新书
+6. 再继续验证编辑、删除、封面更新是否同步过去
+
+同步触发时机：
+
+- 启动应用后
+- 手动点刷新
+- 保存书籍后
+- 删除书籍后
+
+同步规则：
+
+- 书籍更新：按 `updatedAt` 更晚的版本胜出
+- 书籍删除：按 `deletedAt` 更晚的墓碑胜出
+
+### 验证“共享书库文件夹”同步
+
+这是给不同 Apple ID 共用一套书库用的，不依赖“同一个人同一个 Apple ID”。
+
+操作步骤：
+
+1. 由其中一方在 iCloud Drive 中创建一个专用文件夹，例如 `家庭共享书库`
+2. 在系统层把该文件夹共享给另一个 Apple ID
+3. 双方都安装 app
+4. 双方在 app 顶部工具栏打开“同步目标”菜单
+5. 选择“共享书库文件夹”
+6. 各自选中同一个共享文件夹
+7. 等同步状态变成“已同步”后，再开始多人编辑
+
+建议：
+
+- 不要直接共享整个 iCloud Drive 根目录
+- 用专门的共享文件夹
+- 第一次切过去后，先做一轮新增 / 编辑 / 删除的冒烟验证
+
+### 云同步调试时怎么判断问题出在哪
+
+- 如果状态是“同步未开启”：
+  大概率还在跑 `Debug`，或者签名没拿到 iCloud entitlement
+- 如果状态是“同步失败”：
+  先看弹窗错误，再检查 iCloud 登录状态、共享文件夹权限、以及设备网络
+- 如果一台设备改了，另一台没看到：
+  先在第二台设备点刷新，再确认两边是不是同一个 Apple ID / 同一个共享文件夹
+- 如果只是想测本地功能：
+  不要在云同步问题上卡住，切回 `Debug` 继续开发
+
+## 如何分发给朋友测试
+
+### 方式 1：把源码给对方，让她自己用 Xcode 跑
+
+适合对方有 Mac 和 Xcode，也愿意自己处理签名。
+
+步骤：
+
+1. 把仓库发给她
+2. 她打开 `homeLibrary.xcodeproj`
+3. 她在自己的 Xcode 里登录自己的 Apple ID
+4. 在 `Signing & Capabilities` 里选择她自己的 Team
+5. 如果签名冲突，就把 `Bundle Identifier` 改成她自己的唯一值
+6. 如果她只是测本地功能，直接跑 `Debug`
+7. 如果她要测自己的 iCloud，同步配置也要改成她自己的 bundle / iCloud 容器
+
+这种方式下，她测试的是她自己签名的一份独立 app。
+
+### 方式 2：用 TestFlight 分发给朋友
+
+这是最推荐的方式，适合“朋友不看源码，只想安装测试版”。
+
+#### 第一步：准备 App Store Connect 记录
+
+1. 确认 Apple Developer Program 订阅已生效
+2. 登录 App Store Connect
+3. 创建一个 app 记录，并使用和 Xcode 工程一致的 `Bundle Identifier`
+
+#### 第二步：从 Xcode 归档并上传构建
+
+1. 在 Xcode 中选择一个真实设备，或者 `Any iOS Device`
+2. 确认当前签名、bundle id、版本号都正确
+3. 选择 `Product > Archive`
+4. Archive 完成后会打开 `Organizer`
+5. 在 `Organizer` 中选择刚生成的 archive
+6. 点击 `Distribute App`
+7. 选择 `App Store Connect`
+8. 继续上传，等待 Apple 处理构建
+
+注意：
+
+- 如果你要给“朋友”这种外部测试者装，请走正常的 TestFlight / App Store Connect 上传流程
+- 不要只做 `TestFlight Internal Only` 上传，否则这个构建只能给内部测试者使用
+
+#### 第三步：在 TestFlight 邀请测试者
+
+上传完成后，进入 App Store Connect 的 `TestFlight` 页面。
+
+有两种测试者：
+
+- 内部测试者：你 App Store Connect 团队里的成员
+- 外部测试者：你的朋友、家人、非团队成员
+
+如果你要邀请朋友，按下面做：
+
+1. 先确认构建已经处理完成
+2. 在 `TestFlight` 里先创建内部测试组
+3. 再创建外部测试组
+4. 把构建添加到外部测试组
+5. 通过邮箱邀请，或者生成公开邀请链接
+
+说明：
+
+- 第一次给外部测试者分发某个构建时，通常还要经过一次 Beta App Review
+- 审核通过后，朋友会收到 TestFlight 邀请
+- 朋友在自己的 iPhone 上安装 `TestFlight` app 后，就可以接受邀请并安装
+
+### 方式 3：你自己先做多设备同步验证
+
+如果你的目标只是验证“同一套书库能不能跨设备同步”，最快的办法不是先发给别人，而是先在你自己的设备上完成闭环：
+
+- `My Mac`
+- 你的 iPhone / iPad
+
+两边安装同一个带 iCloud entitlement 的构建，并使用同一个 Apple ID。
+
+## 如果朋友要和你共享同一套数据
+
+这里要把“安装 app”与“共享同一套书库”分开理解。
+
+### 当前已经支持
+
+- 同一个 Apple ID 通过“个人 iCloud”跨设备同步
+- 不同 Apple ID 通过“共享书库文件夹”维护同一套书库
+
+### 当前还不支持
+
+- 在 app 内邀请成员加入家庭书库
+- 给成员设置只读 / 可编辑 / 可删除权限
+
+也就是说：
+
+- 如果朋友只是装了你的 app，但没有选中同一个共享文件夹，她看到的只是她自己的数据
+- 如果你们双方都切到同一个共享文件夹，新增、修改、删除会合并到同一套书库
+- 如果你们仍使用“个人 iCloud”模式，那么数据只会在同一个 Apple ID 下互通
 
 ## 在你的电脑和手机上怎么用
 
@@ -164,7 +431,7 @@ Personal development teams do not support the iCloud capability
 ### 你自己的手机或平板（iPhone / iPad）
 
 1. 用 Xcode 打开工程，运行目标选你的真机
-2. 第一次装到真机时，按系统要求完成开发者信任 / 开发者模式设置
+2. 第一次装到真机时，按系统要求完成设备信任和开发者模式设置
 3. 安装完成后，手机上的操作和 Mac 基本一致：
    - 搜索、筛选
    - 添加书籍
@@ -172,115 +439,6 @@ Personal development teams do not support the iCloud capability
    - 编辑书籍
    - 删除书籍
 4. 如果你希望手机和电脑看到同一套数据，需要两边都登录同一个 Apple ID，并且 iCloud 可用
-
-### 同一个人跨设备同步怎么工作
-
-- 这个应用当前没有应用内账号系统，没有“邮箱注册 / 密码登录 / 邀请成员”页面
-- 当前的“登录”其实是系统层的 Apple ID 登录，不是 app 内登录
-- 只要你的 Mac、iPhone、iPad 登录的是同一个 Apple ID，并且项目签名能拿到 `iCloud.yu.homeLibrary` 容器，书库就会自动同步
-- 同步触发时机：
-  - 启动应用后
-  - 手动点刷新
-  - 保存书籍后
-  - 删除书籍后
-- 修改冲突时，以 `updatedAt` 更新更晚的版本为准
-- 删除冲突时，以 `deletedAt` 更晚的删除记录为准
-- 所以你在一台设备上删除一本书后，其他同 Apple ID 的设备同步后也会看到这本书被删除
-
-## 如何分发给伙伴测试
-
-当前项目是原生 SwiftUI 工程，不是网页，也没有现成的公开下载链接。要给伙伴测试，现实里有三种方式：
-
-### 方式 1：把源码发给她，让她自己用 Xcode 跑
-
-适合对方有 Mac 和 Xcode。
-
-1. 把仓库发给她
-2. 她在自己的 Mac 上打开 `homeLibrary.xcodeproj`
-3. 如果她不在你的开发团队里，需要先处理签名：
-   - 改成她自己的 `Bundle ID`、签名团队、iCloud 容器；或者
-   - 临时关闭 iCloud capability，只测试本地功能
-4. 运行到 `My Mac` 或自己的 iPhone
-
-这种方式下，她测试的是一份独立安装的 app。
-
-### 方式 2：你打 TestFlight 给她
-
-适合对方只想安装测试版，不想碰源码。
-
-1. 你需要 Apple Developer Program
-2. 用你自己的发布签名、Bundle ID、iCloud 配置打包上传到 App Store Connect
-3. 在 TestFlight 邀请她
-4. 她用自己的 Apple ID 安装测试版
-
-这是最适合“分发给伙伴测试”的方式。现在如果你们还要共享同一套书库，可以在 app 里把双方都切到同一个共享书库文件夹。
-
-### 方式 3：只验证你自己的多设备同步
-
-如果你的目标只是验证“同一份书库能不能在多台设备保持一致”，最直接的方法不是把 app 发给别人，而是你自己在：
-
-- `My Mac`
-- 你的 iPhone / iPad
-
-上都安装同一个构建，并登录同一个 Apple ID 来测试。
-
-## 她要怎么登录、共享、修改、删除你的数据
-
-这里需要明确区分“安装 app 测试”和“多人共享同一套书库”。
-
-### 现在已经支持的
-
-- 你自己在多台设备之间共享同一套数据
-- 你自己在任意一台设备上新增、修改、删除书籍
-- 这些改动通过 iCloud 同步到你自己其他设备
-- 不同 Apple ID 通过同一个共享文件夹共同维护同一套书库
-
-### 现在还不支持的
-
-- 你在 app 里邀请她加入你的家庭书库
-- 给不同成员设置“只读 / 可编辑 / 可删除”权限
-
-原因很简单：当前跨 Apple ID 的方案是“共享文件夹同步”，不是独立账号系统；项目里还没有成员权限、操作审计和邀请流。
-
-### 这意味着什么
-
-- 如果她用自己的 Apple ID 安装 app，但没有选中和你相同的共享文件夹，她看到的仍然只是她自己的本地书库 / 她自己的 iCloud 数据
-- 只要你们双方都把同步目标切到同一个共享文件夹，新增、修改、删除都会合并到同一套书库
-- 如果你们仍使用“个人 iCloud”模式，那么数据仍然只在同一 Apple ID 下互通
-
-### 不同 Apple ID 怎么接到同一套书库
-
-1. 由其中一方在 iCloud Drive 里创建一个专用文件夹，比如 `家庭共享书库`
-2. 在系统层把这个文件夹共享给另一个 Apple ID
-3. 双方在 app 顶部工具栏打开同步目标菜单，选择“共享书库文件夹”
-4. 各自选中同一个共享文件夹
-5. 之后双方的改动都会通过该文件夹合并
-
-建议：
-
-- 用专门的共享文件夹，不要直接拿整个 iCloud Drive 根目录
-- 首次切换后等状态变成“已同步”再开始多人编辑
-- 冲突规则仍然是 `updatedAt` / `deletedAt` 较新的版本胜出
-
-### 如果你只是想让她拿你的现有数据做一次测试
-
-当前没有应用内“导出 / 导入 / 分享书库”功能，所以只能用临时方案：
-
-1. 在 Mac 上把本地数据目录打包给她
-2. 让她在本地开发环境里替换自己的数据目录后再运行
-
-这属于“一次性拷贝数据”，不是实时共享。现在更合适的方式是直接使用共享文件夹同步。
-
-### 云同步前提
-
-如果要验证真实 iCloud 同步，需要：
-
-- 使用带 iCloud capability 的签名团队
-- 保持 `homeLibrary/homeLibrary.entitlements`
-- 如果使用“个人 iCloud”模式，在需要同步的设备上登录同一个 Apple ID
-- 如果使用“共享书库文件夹”模式，把同一个共享文件夹授权给相关 Apple ID
-
-如果当前只想本地开发，不登录 iCloud 也能正常使用本地书库。
 
 ## 本地数据位置
 
