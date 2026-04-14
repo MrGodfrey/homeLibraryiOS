@@ -142,7 +142,15 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 - `com.apple.developer.icloud-services = CloudKit`
 - 容器标识：`iCloud.yu.homeLibrary`
 
-`homeLibrary/homeLibrary.entitlements` 已切到 CloudKit。
+`homeLibrary/homeLibrary.entitlements` 只在 `Release` 下启用。
+
+日常本地开发 / 真机联调默认走 `Debug`：
+
+- 不挂 iCloud entitlement
+- 运行时默认本地模式
+- 本地缓存与会话落到 `Application Support/homeLibrary/local-debug/`
+
+等 CloudKit capability 可用后，再把 Scheme 的 Run 配置切到 `Release`，就会恢复 CloudKit 容器与真实同步验证。
 
 ### CloudKit 索引
 

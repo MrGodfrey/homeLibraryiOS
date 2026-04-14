@@ -69,6 +69,10 @@ final class LibraryStore: ObservableObject {
     }
 
     var canSwitchToOwnedRepository: Bool {
+        guard remoteService != nil else {
+            return false
+        }
+
         guard let ownedRepository else {
             return false
         }
@@ -372,8 +376,12 @@ final class LibraryStore: ObservableObject {
 
     private func ensureCurrentRepositoryIfNeeded() async throws -> LibraryRepositoryReference {
         if let currentRepository = sessionState.currentRepository {
-            currentRepositoryChanged(currentRepository)
-            return currentRepository
+            if repositoryMatchesCurrentMode(currentRepository) {
+                currentRepositoryChanged(currentRepository)
+                return currentRepository
+            }
+
+            sessionState.currentRepository = nil
         }
 
         if let remoteService {
@@ -413,6 +421,14 @@ final class LibraryStore: ObservableObject {
         sessionState.currentRepository = localRepository
         persistSessionState()
         return localRepository
+    }
+
+    private func repositoryMatchesCurrentMode(_ repository: LibraryRepositoryReference) -> Bool {
+        if remoteService != nil {
+            return repository.role != .localOnly
+        }
+
+        return repository.role == .localOnly
     }
 
     private func migrateLegacyBooksIfNeeded(into repository: LibraryRepositoryReference) async throws {
