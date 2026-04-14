@@ -14,3 +14,4 @@
 - 完成 Cloudflare 数据迁移：从源仓库的 D1 / R2 导出 `110` 本书及全部封面，生成当前 app 的 `homeLibrary/SeedBooks.json`，并在首次启动时自动导入本地存储。
 - 完成容器预落库：已将 `homeLibrary/SeedBooks.json` 直接复制到 macOS 容器 `~/Library/Containers/yu.homeLibrary/Data/Library/Application Support/homeLibrary/books.json`，当前本地库确认包含 `110` 本书。
 - 修复迁移后读取失败：扩展日期解码逻辑，兼容带毫秒的 ISO8601 时间字符串，例如 `2026-04-14T01:59:07.000Z`。
+- 处理模板 UI 测试噪音：将默认生成的 launch / performance UI tests 改为显式 skip，避免因 Xcode 未产出可启动 app bundle 而持续失败。
