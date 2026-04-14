@@ -15,14 +15,14 @@ import AppKit
 typealias PlatformImage = NSImage
 #endif
 
-enum BookLocation: String, CaseIterable, Codable, Identifiable, Sendable {
+nonisolated enum BookLocation: String, CaseIterable, Codable, Identifiable, Sendable {
     case chengdu = "成都"
     case chongqing = "重庆"
 
     var id: String { rawValue }
 }
 
-enum LibraryFilterTab: String, CaseIterable, Identifiable, Sendable {
+nonisolated enum LibraryFilterTab: String, CaseIterable, Identifiable, Sendable {
     case all = "全部"
     case chengdu = "成都"
     case chongqing = "重庆"
@@ -41,7 +41,7 @@ enum LibraryFilterTab: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-struct Book: Identifiable, Hashable, Codable, Sendable {
+nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
     let id: String
     var title: String
     var author: String
@@ -53,7 +53,7 @@ struct Book: Identifiable, Hashable, Codable, Sendable {
     var createdAt: Date
     var updatedAt: Date
 
-    init(
+    nonisolated init(
         id: String,
         title: String,
         author: String = "",
@@ -92,7 +92,7 @@ struct Book: Identifiable, Hashable, Codable, Sendable {
     }
 }
 
-struct LegacyBook: Hashable, Codable, Sendable {
+nonisolated struct LegacyBook: Hashable, Codable, Sendable {
     let id: String
     var title: String
     var author: String
@@ -105,12 +105,12 @@ struct LegacyBook: Hashable, Codable, Sendable {
     var updatedAt: Date
 }
 
-struct BookDeletionTombstone: Identifiable, Hashable, Codable, Sendable {
+nonisolated struct BookDeletionTombstone: Identifiable, Hashable, Codable, Sendable {
     let id: String
     let deletedAt: Date
 }
 
-struct BookDraft: Equatable, Sendable {
+nonisolated struct BookDraft: Equatable, Sendable {
     var title: String
     var author: String
     var publisher: String
@@ -164,7 +164,7 @@ struct BookDraft: Equatable, Sendable {
     }
 }
 
-enum LibraryFilter {
+nonisolated enum LibraryFilter {
     static func filteredBooks(from books: [Book], query: String, tab: LibraryFilterTab) -> [Book] {
         let keyword = query.trimmed.lowercased()
         let normalizedISBNKeyword = query.normalizedISBN
@@ -199,16 +199,16 @@ enum LibraryFilter {
 }
 
 extension String {
-    var trimmed: String {
+    nonisolated var trimmed: String {
         trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    var nilIfEmpty: String? {
+    nonisolated var nilIfEmpty: String? {
         let value = trimmed
         return value.isEmpty ? nil : value
     }
 
-    var normalizedISBN: String {
+    nonisolated var normalizedISBN: String {
         replacingOccurrences(of: "[^0-9Xx]", with: "", options: .regularExpression)
             .uppercased()
     }

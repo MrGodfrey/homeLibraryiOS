@@ -7,8 +7,8 @@
 
 import Foundation
 
-struct LibraryAppConfiguration: Sendable {
-    static let defaultCloudContainerIdentifier = "iCloud.yu.homeLibrary"
+nonisolated struct LibraryAppConfiguration: Sendable {
+    nonisolated static let defaultCloudContainerIdentifier = "iCloud.yu.homeLibrary"
 
     let localStore: LibraryDiskStore
     let legacyBooksURL: URL?

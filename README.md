@@ -1,176 +1,222 @@
 # homeLibrary
 
-一个用 SwiftUI 编写的家庭藏书管理应用，当前版本优先恢复原有书库能力，并把数据层收敛为本地 JSON 持久化。
+一个用 SwiftUI 编写的家庭藏书管理应用。当前版本已经完成 iOS 端落地、云同步接入，以及“图片与书籍数据分离存储”的重构。
 
-## 项目现状
+## 当前状态
 
-截至 2026-04-14，项目已经完成从旧版 Cloudflare 数据源到当前原生 App 的第一阶段迁移，主流程可用：
+截至 2026-04-14，项目已经具备以下能力：
 
-- 已实现藏书列表展示
-- 已实现按 `成都` / `重庆` 筛选
-- 已实现按书名、作者、ISBN 搜索
-- 已实现新增、编辑、删除书籍
-- 已实现封面选择、存储与展示
-- 已实现 ISBN 自动补全
-- 已实现 ISBN 扫码入口
-- 已完成历史数据导入，当前仓库内置 `110` 本书和对应封面作为种子数据
+- iPhone / iPad / macOS 共用一套 SwiftUI 界面
+- 查看全部藏书
+- 按 `成都` / `重庆` 筛选
+- 按书名、作者、ISBN 搜索
+- 新增、编辑、删除书籍
+- 选择并展示书籍封面
+- ISBN 自动补全
+- ISBN 扫码入口
+- iCloud Documents 云同步
+- 旧版 `books.json` / `SeedBooks.json` 自动迁移
 
-当前已验证情况：
+## 这次改了什么
 
-- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=macOS' test` 通过
-- 单元测试 `3` 个通过
-- UI 测试当前为显式 `skip`，不会阻塞构建，但还没有覆盖真实交互流程
+### 1. iOS 版本
 
-## 技术方案
+工程本身就是多平台 target，这次把它收敛成真正可验证的 iOS 版本：
 
-- UI：SwiftUI
-- 持久化：本地 `JSON`
-- 图片：书籍封面以二进制形式写入 JSON
-- ISBN 数据来源：
-  - Google Books
-  - Open Library
-- 扫码能力：VisionKit `DataScannerViewController`
+- 保留统一 SwiftUI 代码路径
+- 在 iOS Simulator 上补了真实 UI 测试
+- 为表单、列表、工具栏增加了自动化测试标识
 
-当前版本不依赖 iCloud / CloudKit，同步能力暂时关闭。
+### 2. 图片和数据分离
+
+旧方案把封面二进制直接写进整库 JSON，随着书量增加会带来几个问题：
+
+- 单文件越来越大
+- 每次改一条记录都要重写整个文件
+- 云同步粒度过粗
+
+现在改成了结构化目录：
+
+```text
+Application Support/homeLibrary/
+├── manifest.json
+├── books/
+│   └── <book-id>.json
+├── covers/
+│   └── <cover-asset-id>.bin
+├── deletions/
+│   └── <book-id>.json
+└── books.legacy.backup.json   # 仅迁移旧数据时生成
+```
+
+说明：
+
+- `books/` 只保存元数据
+- `covers/` 只保存封面文件
+- `deletions/` 保存删除墓碑，给云同步做冲突处理
+
+### 3. 云同步
+
+同步层使用 iCloud Documents 容器镜像本地目录结构。
+
+同步规则：
+
+- 书籍更新：按 `updatedAt` 最后写入胜出
+- 书籍删除：按 tombstone 的 `deletedAt` 胜出
+- 封面资源：按 `coverAssetID` 复制补齐
+
+触发时机：
+
+- 应用加载后自动尝试同步
+- 手动刷新时同步
+- 保存 / 删除后同步
+
+界面会显示当前同步状态。
+
+## 旧数据迁移
+
+为了兼容现有数据，这次没有直接改 bundled `SeedBooks.json` 的格式，而是在首次启动时自动迁移：
+
+- 如果本地有旧版 `books.json`，优先迁移本地数据
+- 否则迁移 bundled `SeedBooks.json`
+- 迁移时把旧的 `coverData` 拆成独立封面文件
+
+这样可以保留现有种子文件，同时把运行时存储切到新结构。
 
 ## 目录结构
 
 ```text
 homeLibrary/
-├── homeLibrary.xcodeproj/           Xcode 工程
-├── homeLibrary/                     主应用源码
-│   ├── ContentView.swift            列表页
-│   ├── BookEditorView.swift         新增 / 编辑页
-│   ├── LibraryStore.swift           本地数据读写
-│   ├── ISBNLookupService.swift      ISBN 自动补全
-│   ├── ISBNScannerView.swift        ISBN 扫码
-│   └── SeedBooks.json               首次启动导入的种子数据
-├── homeLibraryTests/                单元测试
-├── homeLibraryUITests/              UI 测试（当前为 skip）
-├── docs/cloudflare-migration.md     历史数据迁移说明
-└── scripts/import_from_cloudflare.mjs
-                                   从旧仓库导出数据的脚本
+├── homeLibrary.xcodeproj/
+├── homeLibrary/
+│   ├── Book.swift
+│   ├── BookEditorView.swift
+│   ├── ContentView.swift
+│   ├── ISBNLookupService.swift
+│   ├── ISBNScannerView.swift
+│   ├── LibraryAppConfiguration.swift
+│   ├── LibraryPersistence.swift
+│   ├── LibraryStore.swift
+│   ├── LibrarySync.swift
+│   ├── homeLibrary.entitlements
+│   ├── homeLibraryApp.swift
+│   └── SeedBooks.json
+├── homeLibraryTests/
+├── homeLibraryUITests/
+├── plan.md
+├── log.md
+└── README.md
 ```
 
-## 如何运行
+## 运行方式
 
-### 1. 环境要求
-
-- macOS
-- 已安装 Xcode
-- 使用本仓库根目录下的 `homeLibrary.xcodeproj`
-
-### 2. 在 Xcode 中启动
+### Xcode
 
 1. 打开 `homeLibrary.xcodeproj`
-2. 选择 scheme：`homeLibrary`
+2. 选择 `homeLibrary` scheme
 3. 选择运行目标：
-   - `My Mac`：适合日常开发和本地验证
-   - iPhone / iPad 真机：如果要测试摄像头扫码，建议使用支持 VisionKit 扫码的真机
-4. 按 `Run`
+   - `iPhone / iPad Simulator`
+   - `iPhone / iPad` 真机
+   - `My Mac`
+4. 点击 `Run`
 
-### 3. 首次启动后的数据行为
+### 云同步前提
 
-- 如果本地还没有书库文件，应用会自动把 `homeLibrary/SeedBooks.json` 复制到本地存储
-- 后续的新增、编辑、删除都只写入本地文件，不会回写种子文件
+如果要验证真实 iCloud 同步，需要：
 
-## 如何使用
+- 使用带 iCloud capability 的签名团队
+- 保持 `homeLibrary/homeLibrary.entitlements`
+- 在需要同步的设备上登录同一个 Apple ID
 
-### 浏览与筛选
-
-- 顶部支持 `全部 / 成都 / 重庆` 切换
-- 支持按书名、作者、ISBN 搜索
-
-### 添加或编辑书籍
-
-- 右上角 `+` 可新增书籍
-- 点击已有书籍卡片或右侧编辑按钮可修改信息
-- 必填项只有书名
-
-### ISBN 自动录入
-
-在编辑页中输入或扫描 ISBN 后，点击“自动补全”：
-
-- 会优先查询 Google Books
-- 如果未命中，再查询 Open Library
-- 自动回填书名、作者、出版社、年份
-
-说明：
-
-- 该功能依赖网络
-- 外部接口返回为空时，需要手动补录
-
-### 扫码
-
-- 支持设备上可直接扫码识别 ISBN
-- 不支持扫码的环境下，会提示改为手动输入
-
-通常以下环境不能直接扫码：
-
-- macOS
-- Simulator
-- 不支持 VisionKit `DataScannerViewController` 的设备
+如果当前只想本地开发，不登录 iCloud 也能正常使用本地书库。
 
 ## 本地数据位置
 
-应用默认把书库写到 `Application Support/homeLibrary/books.json`。
-
-在 macOS 沙盒环境下，实际常见路径类似：
+默认目录：
 
 ```text
-~/Library/Containers/yu.homeLibrary/Data/Library/Application Support/homeLibrary/books.json
+Application Support/homeLibrary
 ```
 
-如果你想重置本地数据，可以删除这个文件后重新启动应用；应用会再次从 `SeedBooks.json` 导入初始数据。
+在 macOS 沙盒下通常会落到：
+
+```text
+~/Library/Containers/yu.homeLibrary/Data/Library/Application Support/homeLibrary
+```
 
 ## 测试
 
-运行测试：
+### 单元测试
 
-```bash
-xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=macOS' test
-```
+覆盖内容：
 
-当前测试覆盖：
-
-- 图书筛选逻辑
-- 表单字段标准化
+- 图书筛选
+- 表单标准化
 - 扫码文本中的 ISBN 提取
+- 元数据 / 封面分离存储
+- 云端更新合并
+- 云端删除传播
 
-## 历史数据迁移
-
-如果需要重新从旧版 Cloudflare 数据源生成种子文件，可执行：
+本次实际验证命令：
 
 ```bash
-node scripts/import_from_cloudflare.mjs --source-repo /Users/wangyu/code/Home-library
+xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary \
+  -destination 'id=8CC688D1-06E8-4A1D-BC56-8AE8A52BA492' \
+  -parallel-testing-enabled NO \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+  -only-testing:homeLibraryTests test
 ```
 
-默认输出：
+结果：`6` 个测试通过。
 
-```text
-homeLibrary/SeedBooks.json
+### UI 测试
+
+覆盖内容：
+
+- iOS 启动烟测
+- 新增 -> 搜索 -> 编辑 -> 删除完整流程
+
+本次实际验证命令：
+
+```bash
+xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary \
+  -destination 'id=8CC688D1-06E8-4A1D-BC56-8AE8A52BA492' \
+  -parallel-testing-enabled NO \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+  -only-testing:homeLibraryUITests/homeLibraryUITests/testAddSearchEditAndDeleteBookOnIOS test
 ```
 
-脚本依赖：
+```bash
+xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary \
+  -destination 'id=8CC688D1-06E8-4A1D-BC56-8AE8A52BA492' \
+  -parallel-testing-enabled NO \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+  -only-testing:homeLibraryUITests/homeLibraryUITestsLaunchTests/testLaunch test
+```
 
-- Node.js
-- 源仓库可用
-- `wrangler` 可执行
-- 当前机器具有有效的 Cloudflare 登录态
+结果：
 
-更多细节见：
+- 主流程 UI 测试通过
+- 启动烟测通过
 
-- `docs/cloudflare-migration.md`
+## ISBN 数据来源
+
+- Google Books
+- Open Library
+
+说明：
+
+- 自动补全依赖网络
+- 接口无结果时需要手动补录
 
 ## 当前限制
 
-- 只有本地存储，没有云同步
-- UI 自动化测试仍是占位状态
-- ISBN 自动补全依赖第三方公开接口，稳定性受外部服务影响
-- 封面二进制直接写入 JSON，种子文件体积较大（当前约 20 MB）
+- 命令行跑 iOS 测试时，当前机器更稳定的方式是先预热 simulator，再使用明确设备 ID 运行
+- 扫码能力仍然依赖支持 `VisionKit DataScannerViewController` 的设备
+- iCloud 同步在未配置可用签名 / 账号时会自动退回本地模式
 
-## 后续建议
+## 后续可以继续做的事
 
-- 为新增 / 编辑 / 删除补充更完整的 UI 测试
-- 评估是否恢复 iCloud 或引入新的同步方案
-- 视数据规模决定是否把封面与书籍元数据拆分存储
+- 为封面资源补充后台清理和更细的缓存策略
+- 为云同步增加更明确的冲突提示和诊断信息
+- 增加批量导入 / 导出能力

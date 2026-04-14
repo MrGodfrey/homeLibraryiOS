@@ -58,8 +58,8 @@ enum LibraryJSONCodec {
     }
 }
 
-struct LibraryManifest: Codable, Equatable, Sendable {
-    static let currentSchemaVersion = 2
+nonisolated struct LibraryManifest: Codable, Equatable, Sendable {
+    nonisolated static let currentSchemaVersion = 2
 
     var schemaVersion: Int
     var initializedAt: Date
@@ -76,7 +76,7 @@ struct LibraryManifest: Codable, Equatable, Sendable {
     }
 }
 
-struct LibrarySnapshot: Sendable {
+nonisolated struct LibrarySnapshot: Sendable {
     let books: [Book]
     let tombstonesByID: [String: BookDeletionTombstone]
 
@@ -89,26 +89,26 @@ struct LibrarySnapshot: Sendable {
     }
 }
 
-struct LibraryDiskStore: Sendable {
+nonisolated struct LibraryDiskStore: Sendable {
     let rootURL: URL
 
-    var booksDirectoryURL: URL {
+    nonisolated var booksDirectoryURL: URL {
         rootURL.appendingPathComponent("books", isDirectory: true)
     }
 
-    var coversDirectoryURL: URL {
+    nonisolated var coversDirectoryURL: URL {
         rootURL.appendingPathComponent("covers", isDirectory: true)
     }
 
-    var deletionsDirectoryURL: URL {
+    nonisolated var deletionsDirectoryURL: URL {
         rootURL.appendingPathComponent("deletions", isDirectory: true)
     }
 
-    var manifestURL: URL {
+    nonisolated var manifestURL: URL {
         rootURL.appendingPathComponent("manifest.json")
     }
 
-    var legacyBooksFileURL: URL {
+    nonisolated var legacyBooksFileURL: URL {
         rootURL.appendingPathComponent("books.json")
     }
 

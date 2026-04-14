@@ -21,7 +21,7 @@ final class homeLibraryUITests: XCTestCase {
 
     @MainActor
     func testAddSearchEditAndDeleteBookOnIOS() throws {
-        XCTAssertTrue(app.otherElements["emptyState"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["当前没有匹配的书籍"].waitForExistence(timeout: 5))
 
         app.buttons["addBookButton"].tap()
 
@@ -42,10 +42,6 @@ final class homeLibraryUITests: XCTestCase {
         yearField.tap()
         yearField.typeText("2002")
 
-        let isbnField = app.textFields["isbnField"]
-        isbnField.tap()
-        isbnField.typeText("9780321146533")
-
         app.buttons["saveBookButton"].tap()
 
         XCTAssertTrue(app.staticTexts["测试驱动开发"].waitForExistence(timeout: 5))
@@ -60,7 +56,7 @@ final class homeLibraryUITests: XCTestCase {
 
         clearSearchField(searchField)
 
-        app.staticTexts["测试驱动开发"].tap()
+        app.buttons["编辑 测试驱动开发"].tap()
 
         XCTAssertTrue(titleField.waitForExistence(timeout: 5))
         replaceText(in: titleField, with: "测试驱动开发实践")
@@ -71,7 +67,7 @@ final class homeLibraryUITests: XCTestCase {
         app.buttons["删除 测试驱动开发实践"].tap()
         app.buttons["删除"].tap()
 
-        XCTAssertTrue(app.otherElements["emptyState"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["当前没有匹配的书籍"].waitForExistence(timeout: 5))
     }
 
     private func clearSearchField(_ element: XCUIElement) {

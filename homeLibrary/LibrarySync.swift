@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum LibrarySyncStatus: Equatable {
+nonisolated enum LibrarySyncStatus: Equatable {
     case idle
     case unavailable
     case syncing
@@ -51,7 +51,7 @@ enum LibrarySyncStatus: Equatable {
     }()
 }
 
-struct CloudSyncConfiguration: Sendable {
+nonisolated struct CloudSyncConfiguration: Sendable {
     var isEnabled: Bool
     var overrideRootURL: URL?
     var containerIdentifier: String?
@@ -76,12 +76,12 @@ struct CloudSyncConfiguration: Sendable {
     }
 }
 
-struct LibrarySyncResult: Sendable {
+nonisolated struct LibrarySyncResult: Sendable {
     let isCloudAvailable: Bool
     let synchronizedAt: Date?
 }
 
-struct LibrarySyncEngine: Sendable {
+nonisolated struct LibrarySyncEngine: Sendable {
     let localStore: LibraryDiskStore
     let configuration: CloudSyncConfiguration
 
