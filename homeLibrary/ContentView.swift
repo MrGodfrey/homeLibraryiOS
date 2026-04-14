@@ -6,19 +6,18 @@
 //
 
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var store: LibraryStore
     @State private var editorTarget: EditorTarget?
     @State private var pendingDeleteBook: Book?
-    @State private var isImportingSharedFolder = false
+    @State private var isShowingRepositorySheet = false
 
     var body: some View {
         NavigationStack {
             content
                 .navigationTitle("家藏万卷")
-                .searchable(text: $store.searchText, prompt: "搜索书名、作者或 ISBN")
+                .searchable(text: $store.searchText, prompt: "搜索书名、作者或出版社")
                 .toolbar {
                     ToolbarItemGroup(placement: .automatic) {
                         Button {
@@ -31,39 +30,13 @@ struct ContentView: View {
                         .accessibilityLabel("刷新")
                         .accessibilityIdentifier("refreshButton")
 
-                        Menu {
-                            Button(store.usesSharedFolder ? "重新选择共享文件夹" : "选择共享书库文件夹") {
-                                isImportingSharedFolder = true
-                            }
-
-                            if store.hasStoredSharedFolder && !store.usesSharedFolder {
-                                Button("切换到共享书库") {
-                                    Task {
-                                        await store.useStoredSharedFolderIfAvailable()
-                                    }
-                                }
-                            }
-
-                            if store.usesSharedFolder {
-                                Button("恢复个人 iCloud 同步") {
-                                    Task {
-                                        await store.usePersonalCloudSync()
-                                    }
-                                }
-                            }
-
-                            if store.hasStoredSharedFolder {
-                                Button("清除共享书库配置", role: .destructive) {
-                                    Task {
-                                        await store.clearSharedFolderConfiguration()
-                                    }
-                                }
-                            }
+                        Button {
+                            isShowingRepositorySheet = true
                         } label: {
                             Image(systemName: "person.2.badge.gearshape")
                         }
-                        .accessibilityLabel("同步目标")
-                        .accessibilityIdentifier("syncTargetMenu")
+                        .accessibilityLabel("仓库管理")
+                        .accessibilityIdentifier("repositoryManagementButton")
 
                         Button {
                             editorTarget = .create(defaultLocation: store.activeTab.location ?? .chengdu)
@@ -78,22 +51,8 @@ struct ContentView: View {
         .task {
             await store.loadBooksIfNeeded()
         }
-        .fileImporter(isPresented: $isImportingSharedFolder, allowedContentTypes: [.folder]) { result in
-            switch result {
-            case .success(let folderURL):
-                Task {
-                    await store.connectSharedFolder(at: folderURL)
-                }
-            case .failure(let error):
-                let nsError = error as NSError
-
-                if nsError.domain == NSCocoaErrorDomain,
-                   nsError.code == CocoaError.userCancelled.rawValue {
-                    return
-                }
-
-                store.alertMessage = LibraryStore.userFacingMessage(for: error)
-            }
+        .sheet(isPresented: $isShowingRepositorySheet) {
+            RepositoryManagementView(store: store)
         }
         .sheet(item: $editorTarget) { target in
             BookEditorView(
@@ -121,7 +80,7 @@ struct ContentView: View {
                 pendingDeleteBook = nil
             }
         } message: {
-            Text("删除后会同步到当前同步目标。")
+            Text("删除后会立即写入当前仓库。")
         }
         .alert("提示", isPresented: alertBinding) {
             Button("知道了", role: .cancel) {
@@ -157,10 +116,10 @@ struct ContentView: View {
                 }
             }
 
-            SyncDestinationPanel(
-                title: store.syncDestinationTitle,
-                subtitle: store.syncDestinationSubtitle,
-                isUsingSharedFolder: store.usesSharedFolder
+            RepositoryPanel(
+                title: store.repositoryTitle,
+                roleTitle: store.repositoryRoleTitle,
+                subtitle: store.repositorySubtitle
             )
 
             if store.visibleBooks.isEmpty && !store.isLoading {
@@ -226,15 +185,19 @@ struct ContentView: View {
     }
 }
 
-private struct SyncDestinationPanel: View {
+private struct RepositoryPanel: View {
     let title: String
+    let roleTitle: String
     let subtitle: String
-    let isUsingSharedFolder: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label(title, systemImage: isUsingSharedFolder ? "person.2.fill" : "icloud")
+            Text(title)
                 .font(.subheadline.weight(.semibold))
+
+            Text(roleTitle)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.tint)
 
             Text(subtitle)
                 .font(.footnote)
@@ -244,7 +207,7 @@ private struct SyncDestinationPanel: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .accessibilityIdentifier("syncTargetPanel")
+        .accessibilityIdentifier("repositoryPanel")
     }
 }
 
@@ -264,9 +227,7 @@ private struct SyncStatusBadge: View {
 
     private var tintColor: Color {
         switch status {
-        case .idle:
-            return .secondary
-        case .unavailable:
+        case .idle, .unavailable:
             return .secondary
         case .syncing:
             return .blue
@@ -366,7 +327,9 @@ private struct BookThumbnail: View {
                 .fill(Color.secondary.opacity(0.08))
 
             if let platformImage {
-                imageView(platformImage)
+                Image(uiImage: platformImage)
+                    .resizable()
+                    .scaledToFill()
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             } else {
                 VStack(spacing: 8) {
@@ -394,19 +357,6 @@ private struct BookThumbnail: View {
         }
 
         return PlatformImage(data: coverData)
-    }
-
-    @ViewBuilder
-    private func imageView(_ image: PlatformImage) -> some View {
-        #if canImport(UIKit)
-        Image(uiImage: image)
-            .resizable()
-            .scaledToFill()
-        #elseif canImport(AppKit)
-        Image(nsImage: image)
-            .resizable()
-            .scaledToFill()
-        #endif
     }
 }
 

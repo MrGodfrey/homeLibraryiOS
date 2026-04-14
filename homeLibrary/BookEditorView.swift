@@ -18,9 +18,7 @@ struct BookEditorView: View {
 
     @State private var draft: BookDraft
     @State private var selectedPhotoItem: PhotosPickerItem?
-    @State private var isLookingUp = false
     @State private var isSaving = false
-    @State private var isShowingScanner = false
     @State private var alertMessage: String?
 
     init(
@@ -39,12 +37,11 @@ struct BookEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
-                isbnSection
                 informationSection
                 coverSection
             }
             .navigationTitle(editingBook == nil ? "添加新书" : "编辑书籍")
-            .editorNavigationTitleDisplayMode()
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") {
@@ -63,9 +60,6 @@ struct BookEditorView: View {
                     .accessibilityIdentifier("saveBookButton")
                 }
             }
-            .sheet(isPresented: $isShowingScanner) {
-                scannerSheet
-            }
             .task(id: selectedPhotoItem) {
                 guard let selectedPhotoItem else {
                     return
@@ -83,47 +77,6 @@ struct BookEditorView: View {
         }
     }
 
-    private var isbnSection: some View {
-        Section("ISBN 自动录入") {
-            TextField("输入 ISBN 号", text: $draft.isbn)
-                .isbnTextFieldBehavior()
-                .accessibilityIdentifier("isbnField")
-
-            HStack {
-                Button {
-                    Task {
-                        await lookupISBN()
-                    }
-                } label: {
-                    if isLookingUp {
-                        Label("查询中", systemImage: "hourglass")
-                    } else {
-                        Label("自动补全", systemImage: "magnifyingglass")
-                    }
-                }
-                .disabled(isLookingUp)
-                .accessibilityIdentifier("lookupISBNButton")
-
-                Spacer()
-
-                Button {
-                    if ISBNScannerAvailability.isScannerAvailable {
-                        isShowingScanner = true
-                    } else {
-                        alertMessage = "当前设备不支持扫码，请直接输入 ISBN。"
-                    }
-                } label: {
-                    Label("扫码", systemImage: "barcode.viewfinder")
-                }
-                .accessibilityIdentifier("scanISBNButton")
-            }
-
-            Text("扫描或输入 ISBN 后，自动补全书名、作者、出版社和年份。")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-        }
-    }
-
     private var informationSection: some View {
         Section("图书信息") {
             TextField("书名", text: $draft.title)
@@ -133,6 +86,7 @@ struct BookEditorView: View {
             TextField("出版社", text: $draft.publisher)
                 .accessibilityIdentifier("publisherField")
             TextField("出版年份", text: $draft.year)
+                .keyboardType(.numbersAndPunctuation)
                 .accessibilityIdentifier("yearField")
 
             Picker("所在地", selection: $draft.location) {
@@ -141,6 +95,10 @@ struct BookEditorView: View {
                 }
             }
             .accessibilityIdentifier("editorLocationPicker")
+
+            Text("当前版本只保留手动录入。书名、作者、出版社、年份和封面都请直接在 iPhone 上维护。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -151,45 +109,17 @@ struct BookEditorView: View {
                 .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
 
             PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
-                Label(draft.coverData == nil ? "选择封面" : "更换封面", systemImage: "photo")
+                Label(draft.coverData == nil && !draft.keepsExistingCoverReference ? "从 iPhone 上传封面" : "更换封面", systemImage: "photo")
             }
             .accessibilityIdentifier("pickCoverButton")
 
-            if draft.coverData != nil {
+            if draft.coverData != nil || draft.keepsExistingCoverReference {
                 Button("移除封面", role: .destructive) {
                     selectedPhotoItem = nil
                     draft.coverData = nil
+                    draft.keepsExistingCoverReference = false
                 }
                 .accessibilityIdentifier("removeCoverButton")
-            }
-        }
-    }
-
-    private var scannerSheet: some View {
-        NavigationStack {
-            Group {
-                if ISBNScannerAvailability.isScannerAvailable {
-                    ISBNScannerView { scannedText in
-                        handleScan(scannedText)
-                    } onFailure: { message in
-                        alertMessage = message
-                        isShowingScanner = false
-                    }
-                    .ignoresSafeArea()
-                } else {
-                    ContentUnavailableView(
-                        "当前设备不支持扫码",
-                        systemImage: "barcode.viewfinder",
-                        description: Text("请直接输入 ISBN。")
-                    )
-                }
-            }
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭") {
-                        isShowingScanner = false
-                    }
-                }
             }
         }
     }
@@ -214,34 +144,9 @@ struct BookEditorView: View {
             }
 
             draft.coverData = data
+            draft.keepsExistingCoverReference = false
         } catch {
             alertMessage = "读取封面失败，请换一张图片重试。"
-        }
-    }
-
-    @MainActor
-    private func lookupISBN() async {
-        let isbn = ISBNLookupService.normalizeISBN(draft.isbn)
-
-        guard !isbn.isEmpty else {
-            alertMessage = "请先输入或扫描 ISBN。"
-            return
-        }
-
-        isLookingUp = true
-        defer { isLookingUp = false }
-
-        do {
-            let metadata = try await ISBNLookupService.fetchMetadata(for: isbn)
-            draft.isbn = isbn
-            draft.title = metadata.title
-            draft.author = metadata.author
-            draft.publisher = metadata.publisher
-            draft.year = metadata.year
-        } catch let lookupError as ISBNLookupService.LookupError {
-            alertMessage = lookupError.errorDescription
-        } catch {
-            alertMessage = "外部书籍接口暂时不可用，请稍后重试。"
         }
     }
 
@@ -256,24 +161,6 @@ struct BookEditorView: View {
             dismiss()
         }
     }
-
-    @MainActor
-    private func handleScan(_ scannedText: String) {
-        let isbn = ISBNLookupService.extractISBN(from: scannedText)
-
-        guard !isbn.isEmpty else {
-            alertMessage = "没有识别到有效的 ISBN，请重试。"
-            isShowingScanner = false
-            return
-        }
-
-        draft.isbn = isbn
-        isShowingScanner = false
-
-        Task {
-            await lookupISBN()
-        }
-    }
 }
 
 private struct BookCoverPreview: View {
@@ -286,7 +173,9 @@ private struct BookCoverPreview: View {
                 .fill(Color.secondary.opacity(0.08))
 
             if let image = platformImage {
-                imageView(image)
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             } else {
                 VStack(spacing: 10) {
@@ -311,41 +200,5 @@ private struct BookCoverPreview: View {
         }
 
         return PlatformImage(data: data)
-    }
-
-    @ViewBuilder
-    private func imageView(_ image: PlatformImage) -> some View {
-        #if canImport(UIKit)
-        Image(uiImage: image)
-            .resizable()
-            .scaledToFill()
-        #elseif canImport(AppKit)
-        Image(nsImage: image)
-            .resizable()
-            .scaledToFill()
-        #endif
-    }
-}
-
-private extension View {
-    @ViewBuilder
-    func isbnTextFieldBehavior() -> some View {
-        #if canImport(UIKit)
-        self
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .keyboardType(.asciiCapable)
-        #else
-        self
-        #endif
-    }
-
-    @ViewBuilder
-    func editorNavigationTitleDisplayMode() -> some View {
-        #if canImport(UIKit)
-        self.navigationBarTitleDisplayMode(.inline)
-        #else
-        self
-        #endif
     }
 }

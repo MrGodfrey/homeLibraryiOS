@@ -7,147 +7,146 @@
 
 import Foundation
 
-nonisolated enum SharedLibraryBookmarkAccess {
-    #if os(iOS)
-    nonisolated static let creationOptions: URL.BookmarkCreationOptions = []
-    nonisolated static let resolutionOptions: URL.BookmarkResolutionOptions = []
-    #else
-    nonisolated static let creationOptions: URL.BookmarkCreationOptions = [.withSecurityScope]
-    nonisolated static let resolutionOptions: URL.BookmarkResolutionOptions = [.withSecurityScope]
-    #endif
-}
+nonisolated enum RepositoryRole: String, Codable, Sendable {
+    case owner
+    case member
+    case localOnly
 
-nonisolated enum LibrarySyncMode: String, Codable, Sendable {
-    case personalCloud
-    case sharedFolder
-}
-
-nonisolated struct SharedLibraryFolderBookmark: Codable, Equatable, Sendable {
-    let displayName: String
-    let bookmarkData: Data
-
-    nonisolated static func make(from folderURL: URL) throws -> SharedLibraryFolderBookmark {
-        let didStartAccess = folderURL.startAccessingSecurityScopedResource()
-        defer {
-            if didStartAccess {
-                folderURL.stopAccessingSecurityScopedResource()
-            }
+    var title: String {
+        switch self {
+        case .owner:
+            return "我的仓库"
+        case .member:
+            return "加入的仓库"
+        case .localOnly:
+            return "本地模式"
         }
-
-        let resourceValues = try? folderURL.resourceValues(forKeys: [.nameKey])
-        let displayName = resourceValues?.name?.trimmed.nilIfEmpty ?? folderURL.lastPathComponent
-        let bookmarkData = try folderURL.bookmarkData(
-            options: SharedLibraryBookmarkAccess.creationOptions,
-            includingResourceValuesForKeys: [.nameKey],
-            relativeTo: nil
-        )
-
-        return SharedLibraryFolderBookmark(displayName: displayName, bookmarkData: bookmarkData)
     }
 }
 
-nonisolated struct LibrarySyncTarget: Equatable, Sendable {
-    var mode: LibrarySyncMode
-    var sharedFolderBookmark: SharedLibraryFolderBookmark?
+nonisolated struct RepositoryCredentials: Equatable, Codable, Sendable {
+    var account: String
+    var password: String
+}
 
-    nonisolated static var personalCloud: LibrarySyncTarget {
-        LibrarySyncTarget(mode: .personalCloud, sharedFolderBookmark: nil)
+nonisolated struct LibraryRepositoryReference: Identifiable, Equatable, Codable, Sendable {
+    let id: String
+    var name: String
+    var role: RepositoryRole
+    var accessAccount: String?
+    var savedPassword: String?
+
+    var isOwner: Bool {
+        role == .owner
     }
 
-    nonisolated var activeSharedFolderBookmark: SharedLibraryFolderBookmark? {
-        guard mode == .sharedFolder else {
+    var subtitle: String {
+        switch role {
+        case .owner:
+            return "由你的 CloudKit 仓库承载，其他设备可通过仓库账号密码加入。"
+        case .member:
+            return "你当前正在协作维护别人的仓库。"
+        case .localOnly:
+            return "当前为本地调试模式，不连接 CloudKit。"
+        }
+    }
+
+    var credentials: RepositoryCredentials? {
+        guard let account = accessAccount, let password = savedPassword else {
             return nil
         }
 
-        return sharedFolderBookmark
+        return RepositoryCredentials(account: account, password: password)
     }
 
-    nonisolated var usesSharedFolder: Bool {
-        activeSharedFolderBookmark != nil
+    func updatingRole(_ role: RepositoryRole) -> LibraryRepositoryReference {
+        LibraryRepositoryReference(
+            id: id,
+            name: name,
+            role: role,
+            accessAccount: accessAccount,
+            savedPassword: savedPassword
+        )
     }
 
-    nonisolated var hasStoredSharedFolder: Bool {
-        sharedFolderBookmark != nil
-    }
-
-    nonisolated var destinationTitle: String {
-        if let activeSharedFolderBookmark {
-            return "共享书库 · \(activeSharedFolderBookmark.displayName)"
-        }
-
-        return "个人 iCloud"
-    }
-
-    nonisolated var destinationSubtitle: String {
-        if usesSharedFolder {
-            return "把同一个共享文件夹选到其他 Apple ID 设备后，双方会合并到同一套书库。"
-        }
-
-        return "当前仍是你自己的 iCloud 容器同步，只会在同一 Apple ID 下互通。"
-    }
-
-    nonisolated func switchingToPersonalCloud() -> LibrarySyncTarget {
-        LibrarySyncTarget(mode: .personalCloud, sharedFolderBookmark: sharedFolderBookmark)
-    }
-
-    nonisolated func switchingToSharedFolder(_ bookmark: SharedLibraryFolderBookmark) -> LibrarySyncTarget {
-        LibrarySyncTarget(mode: .sharedFolder, sharedFolderBookmark: bookmark)
-    }
-
-    nonisolated func removingSharedFolder() -> LibrarySyncTarget {
-        .personalCloud
+    func updatingCredentials(_ credentials: RepositoryCredentials?) -> LibraryRepositoryReference {
+        LibraryRepositoryReference(
+            id: id,
+            name: name,
+            role: role,
+            accessAccount: credentials?.account,
+            savedPassword: credentials?.password
+        )
     }
 }
 
-nonisolated struct LibrarySyncSettingsStore: Sendable {
+nonisolated struct LibrarySessionState: Equatable, Codable, Sendable {
+    var ownerProfileID: String
+    var ownedRepository: LibraryRepositoryReference?
+    var currentRepository: LibraryRepositoryReference?
+
+    nonisolated static func makeNew(ownerProfileID: String = UUID().uuidString) -> LibrarySessionState {
+        LibrarySessionState(
+            ownerProfileID: ownerProfileID,
+            ownedRepository: nil,
+            currentRepository: nil
+        )
+    }
+}
+
+nonisolated struct RepositorySessionStore: Sendable {
     let namespace: String
 
     nonisolated init(namespace: String) {
         self.namespace = namespace
     }
 
-    nonisolated func load(userDefaults: UserDefaults = .standard) -> LibrarySyncTarget {
-        let mode = LibrarySyncMode(rawValue: userDefaults.string(forKey: key("mode")) ?? "") ?? .personalCloud
-        let bookmarkData = userDefaults.data(forKey: key("sharedFolderBookmark"))
-        let displayName = userDefaults.string(forKey: key("sharedFolderName"))?.trimmed.nilIfEmpty
+    nonisolated func load(userDefaults: UserDefaults = .standard) -> LibrarySessionState {
+        let decoder = JSONDecoder()
 
-        let bookmark = bookmarkData.map {
-            SharedLibraryFolderBookmark(
-                displayName: displayName ?? "共享书库",
-                bookmarkData: $0
-            )
+        if let data = userDefaults.data(forKey: key("session")),
+           let state = try? decoder.decode(LibrarySessionState.self, from: data) {
+            return state
         }
 
-        let target = LibrarySyncTarget(mode: mode, sharedFolderBookmark: bookmark)
-
-        if mode == .sharedFolder, bookmark == nil {
-            return .personalCloud
-        }
-
-        return target
+        return .makeNew(ownerProfileID: loadOrCreateOwnerProfileID(userDefaults: userDefaults))
     }
 
-    nonisolated func save(_ target: LibrarySyncTarget, userDefaults: UserDefaults = .standard) {
-        userDefaults.set(target.mode.rawValue, forKey: key("mode"))
-        userDefaults.set(target.sharedFolderBookmark?.bookmarkData, forKey: key("sharedFolderBookmark"))
-        userDefaults.set(target.sharedFolderBookmark?.displayName, forKey: key("sharedFolderName"))
+    nonisolated func save(_ state: LibrarySessionState, userDefaults: UserDefaults = .standard) {
+        let encoder = JSONEncoder()
+
+        if let data = try? encoder.encode(state) {
+            userDefaults.set(data, forKey: key("session"))
+        }
+
+        userDefaults.set(state.ownerProfileID, forKey: key("ownerProfileID"))
+    }
+
+    nonisolated func markLegacyMigrationCompleted(
+        for repositoryID: String,
+        userDefaults: UserDefaults = .standard
+    ) {
+        userDefaults.set(true, forKey: key("migration.\(repositoryID)"))
+    }
+
+    nonisolated func hasCompletedLegacyMigration(
+        for repositoryID: String,
+        userDefaults: UserDefaults = .standard
+    ) -> Bool {
+        userDefaults.bool(forKey: key("migration.\(repositoryID)"))
+    }
+
+    nonisolated private func loadOrCreateOwnerProfileID(userDefaults: UserDefaults) -> String {
+        if let existingValue = userDefaults.string(forKey: key("ownerProfileID"))?.trimmed.nilIfEmpty {
+            return existingValue
+        }
+
+        let newValue = UUID().uuidString
+        userDefaults.set(newValue, forKey: key("ownerProfileID"))
+        return newValue
     }
 
     nonisolated private func key(_ suffix: String) -> String {
-        "homeLibrary.sync.\(namespace).\(suffix)"
-    }
-}
-
-enum SharedLibrarySyncError: LocalizedError {
-    case missingSharedFolder
-    case cannotAccessFolder(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .missingSharedFolder:
-            return "共享书库文件夹丢失了，请重新选择一次。"
-        case .cannotAccessFolder(let name):
-            return "无法访问共享书库“\(name)”，请重新选择文件夹并确认系统授权。"
-        }
+        "homeLibrary.repository.\(namespace).\(suffix)"
     }
 }

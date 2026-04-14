@@ -6,14 +6,9 @@
 //
 
 import Foundation
-
-#if canImport(UIKit)
 import UIKit
+
 typealias PlatformImage = UIImage
-#elseif canImport(AppKit)
-import AppKit
-typealias PlatformImage = NSImage
-#endif
 
 nonisolated enum BookLocation: String, CaseIterable, Codable, Identifiable, Sendable {
     case chengdu = "成都"
@@ -41,14 +36,44 @@ nonisolated enum LibraryFilterTab: String, CaseIterable, Identifiable, Sendable 
     }
 }
 
+nonisolated struct BookPayload: Hashable, Codable, Sendable {
+    nonisolated static let currentSchemaVersion = 1
+
+    var schemaVersion: Int
+    var title: String
+    var author: String
+    var publisher: String
+    var year: String
+    var location: BookLocation
+    var customFields: [String: String]
+
+    nonisolated init(
+        schemaVersion: Int = currentSchemaVersion,
+        title: String,
+        author: String = "",
+        publisher: String = "",
+        year: String = "",
+        location: BookLocation,
+        customFields: [String: String] = [:]
+    ) {
+        self.schemaVersion = schemaVersion
+        self.title = title
+        self.author = author
+        self.publisher = publisher
+        self.year = year
+        self.location = location
+        self.customFields = customFields
+    }
+}
+
 nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
     let id: String
     var title: String
     var author: String
     var publisher: String
     var year: String
-    var isbn: String
     var location: BookLocation
+    var customFields: [String: String]
     var coverAssetID: String?
     var createdAt: Date
     var updatedAt: Date
@@ -59,8 +84,8 @@ nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
         author: String = "",
         publisher: String = "",
         year: String = "",
-        isbn: String = "",
         location: BookLocation,
+        customFields: [String: String] = [:],
         coverAssetID: String? = nil,
         createdAt: Date = .now,
         updatedAt: Date = .now
@@ -70,11 +95,43 @@ nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
         self.author = author
         self.publisher = publisher
         self.year = year
-        self.isbn = isbn
         self.location = location
+        self.customFields = customFields
         self.coverAssetID = coverAssetID
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    nonisolated init(
+        id: String,
+        payload: BookPayload,
+        coverAssetID: String? = nil,
+        createdAt: Date = .now,
+        updatedAt: Date = .now
+    ) {
+        self.init(
+            id: id,
+            title: payload.title,
+            author: payload.author,
+            publisher: payload.publisher,
+            year: payload.year,
+            location: payload.location,
+            customFields: payload.customFields,
+            coverAssetID: coverAssetID,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
+    var payload: BookPayload {
+        BookPayload(
+            title: title,
+            author: author,
+            publisher: publisher,
+            year: year,
+            location: location,
+            customFields: customFields
+        )
     }
 
     var displayAuthor: String {
@@ -89,6 +146,19 @@ nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
         }
 
         return "\(publisherText) · \(year.trimmed)"
+    }
+
+    var searchCorpus: String {
+        [
+            title,
+            author,
+            publisher,
+            year,
+            location.rawValue,
+            customFields.values.sorted().joined(separator: " ")
+        ]
+        .joined(separator: " ")
+        .lowercased()
     }
 }
 
@@ -105,28 +175,25 @@ nonisolated struct LegacyBook: Hashable, Codable, Sendable {
     var updatedAt: Date
 }
 
-nonisolated struct BookDeletionTombstone: Identifiable, Hashable, Codable, Sendable {
-    let id: String
-    let deletedAt: Date
-}
-
 nonisolated struct BookDraft: Equatable, Sendable {
     var title: String
     var author: String
     var publisher: String
     var year: String
-    var isbn: String
     var location: BookLocation
+    var customFields: [String: String]
     var coverData: Data?
+    var keepsExistingCoverReference: Bool
 
     init(book: Book? = nil, coverData: Data? = nil, defaultLocation: BookLocation = .chengdu) {
         title = book?.title ?? ""
         author = book?.author ?? ""
         publisher = book?.publisher ?? ""
         year = book?.year ?? ""
-        isbn = book?.isbn ?? ""
         location = book?.location ?? defaultLocation
+        customFields = book?.customFields ?? [:]
         self.coverData = coverData
+        keepsExistingCoverReference = book?.coverAssetID != nil
     }
 
     init(
@@ -134,28 +201,42 @@ nonisolated struct BookDraft: Equatable, Sendable {
         author: String,
         publisher: String,
         year: String,
-        isbn: String,
         location: BookLocation,
-        coverData: Data?
+        customFields: [String: String] = [:],
+        coverData: Data?,
+        keepsExistingCoverReference: Bool = false
     ) {
         self.title = title
         self.author = author
         self.publisher = publisher
         self.year = year
-        self.isbn = isbn
         self.location = location
+        self.customFields = customFields
         self.coverData = coverData
+        self.keepsExistingCoverReference = keepsExistingCoverReference
     }
 
     var normalized: BookDraft {
-        BookDraft(
+        let normalizedCustomFields = customFields.reduce(into: [String: String]()) { partialResult, entry in
+            let key = entry.key.trimmed
+            let value = entry.value.trimmed
+
+            guard !key.isEmpty, !value.isEmpty else {
+                return
+            }
+
+            partialResult[key] = value
+        }
+
+        return BookDraft(
             title: title.trimmed,
             author: author.trimmed,
             publisher: publisher.trimmed,
             year: year.trimmed,
-            isbn: isbn.normalizedISBN,
             location: location,
-            coverData: coverData
+            customFields: normalizedCustomFields,
+            coverData: coverData,
+            keepsExistingCoverReference: keepsExistingCoverReference && coverData == nil
         )
     }
 
@@ -167,7 +248,6 @@ nonisolated struct BookDraft: Equatable, Sendable {
 nonisolated enum LibraryFilter {
     static func filteredBooks(from books: [Book], query: String, tab: LibraryFilterTab) -> [Book] {
         let keyword = query.trimmed.lowercased()
-        let normalizedISBNKeyword = query.normalizedISBN
 
         return books
             .filter { book in
@@ -177,16 +257,11 @@ nonisolated enum LibraryFilter {
                     return false
                 }
 
-                if keyword.isEmpty {
+                guard !keyword.isEmpty else {
                     return true
                 }
 
-                let matchesSearch =
-                    book.title.lowercased().contains(keyword) ||
-                    book.author.lowercased().contains(keyword) ||
-                    (!normalizedISBNKeyword.isEmpty && book.isbn.normalizedISBN.contains(normalizedISBNKeyword))
-
-                return matchesSearch
+                return book.searchCorpus.contains(keyword)
             }
             .sorted { left, right in
                 if left.updatedAt != right.updatedAt {
@@ -207,14 +282,8 @@ extension String {
         let value = trimmed
         return value.isEmpty ? nil : value
     }
-
-    nonisolated var normalizedISBN: String {
-        replacingOccurrences(of: "[^0-9Xx]", with: "", options: .regularExpression)
-            .uppercased()
-    }
 }
 
-#if canImport(UIKit) || canImport(AppKit)
 extension BookDraft {
     var coverImage: PlatformImage? {
         guard let coverData else {
@@ -224,4 +293,3 @@ extension BookDraft {
         return PlatformImage(data: coverData)
     }
 }
-#endif

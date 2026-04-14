@@ -19,7 +19,6 @@ final class homeLibraryTests: XCTestCase {
                 author: "刘慈欣",
                 publisher: "重庆出版社",
                 year: "2008",
-                isbn: "9787536692930",
                 location: .chengdu,
                 createdAt: Date(timeIntervalSince1970: 1),
                 updatedAt: Date(timeIntervalSince1970: 20)
@@ -30,28 +29,32 @@ final class homeLibraryTests: XCTestCase {
                 author: "东野圭吾",
                 publisher: "南海出版公司",
                 year: "2013",
-                isbn: "9787544258609",
                 location: .chongqing,
+                customFields: ["备注": "已借出"],
                 createdAt: Date(timeIntervalSince1970: 2),
                 updatedAt: Date(timeIntervalSince1970: 10)
             )
         ]
 
-        let filtered = LibraryFilter.filteredBooks(from: books, query: "三体", tab: .chengdu)
+        let filtered = LibraryFilter.filteredBooks(from: books, query: "借出", tab: .chongqing)
 
         XCTAssertEqual(filtered.count, 1)
-        XCTAssertEqual(filtered.first?.id, "1")
+        XCTAssertEqual(filtered.first?.id, "2")
     }
 
-    func testNormalizesDraftFieldsBeforeSave() {
+    func testNormalizesDraftFieldsAndCustomFieldsBeforeSave() {
         let draft = BookDraft(
             title: "  家庭书库  ",
             author: "  王宇  ",
             publisher: "  自有出版社 ",
             year: " 2026 ",
-            isbn: " 978-7-111-22222-3 ",
             location: .chengdu,
-            coverData: nil
+            customFields: [
+                "  备注  ": "  已整理  ",
+                "空字段": "   "
+            ],
+            coverData: nil,
+            keepsExistingCoverReference: true
         )
 
         let normalized = draft.normalized
@@ -60,37 +63,46 @@ final class homeLibraryTests: XCTestCase {
         XCTAssertEqual(normalized.author, "王宇")
         XCTAssertEqual(normalized.publisher, "自有出版社")
         XCTAssertEqual(normalized.year, "2026")
-        XCTAssertEqual(normalized.isbn, "9787111222223")
+        XCTAssertEqual(normalized.customFields, ["备注": "已整理"])
+        XCTAssertTrue(normalized.keepsExistingCoverReference)
     }
 
-    func testExtractsEmbeddedISBNFromScannerPayload() {
-        let payload = "EAN-13 9787111122334"
-
-        XCTAssertEqual(ISBNLookupService.extractISBN(from: payload), "9787111122334")
-    }
-
-    func testSyncSettingsStorePersistsSharedFolderSelectionPerNamespace() throws {
-        let suiteName = "homeLibraryTests.syncSettings.\(UUID().uuidString)"
+    func testRepositorySessionStorePersistsRepositoriesPerNamespace() throws {
+        let suiteName = "homeLibraryTests.session.\(UUID().uuidString)"
         let userDefaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         userDefaults.removePersistentDomain(forName: suiteName)
         addTeardownBlock {
             userDefaults.removePersistentDomain(forName: suiteName)
         }
 
-        let store = LibrarySyncSettingsStore(namespace: "primary")
-        let bookmark = SharedLibraryFolderBookmark(
-            displayName: "家庭共享书库",
-            bookmarkData: Data("bookmark".utf8)
+        let store = RepositorySessionStore(namespace: "primary")
+        let ownedRepository = LibraryRepositoryReference(
+            id: "repo-owner",
+            name: "我的书库",
+            role: .owner,
+            accessAccount: "HL1111",
+            savedPassword: "PASS-1111"
         )
-        let target = LibrarySyncTarget(mode: .sharedFolder, sharedFolderBookmark: bookmark)
-
-        store.save(target, userDefaults: userDefaults)
-
-        XCTAssertEqual(store.load(userDefaults: userDefaults), target)
-        XCTAssertEqual(
-            LibrarySyncSettingsStore(namespace: "secondary").load(userDefaults: userDefaults),
-            .personalCloud
+        let joinedRepository = LibraryRepositoryReference(
+            id: "repo-shared",
+            name: "共享书库",
+            role: .member,
+            accessAccount: "HL2222",
+            savedPassword: "PASS-2222"
         )
+        let state = LibrarySessionState(
+            ownerProfileID: "owner-profile",
+            ownedRepository: ownedRepository,
+            currentRepository: joinedRepository
+        )
+
+        store.save(state, userDefaults: userDefaults)
+
+        let restoredState = store.load(userDefaults: userDefaults)
+        XCTAssertEqual(restoredState, state)
+
+        let secondaryState = RepositorySessionStore(namespace: "secondary").load(userDefaults: userDefaults)
+        XCTAssertNil(secondaryState.ownedRepository)
+        XCTAssertNil(secondaryState.currentRepository)
     }
-
 }

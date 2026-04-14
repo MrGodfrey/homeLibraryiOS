@@ -11,10 +11,10 @@ import XCTest
 
 final class LibraryPersistenceTests: XCTestCase {
 
-    func testSeparatesCoverAssetsFromBookMetadata() throws {
+    func testCacheStoreSeparatesCoverAssetsFromBookMetadata() throws {
         let rootURL = try makeTemporaryDirectory()
-        let store = LibraryDiskStore(rootURL: rootURL)
-        try store.prepareForUse(allowBundledSeed: false)
+        let store = LibraryCacheStore(rootURL: rootURL)
+        let repositoryID = "repo-1"
 
         let coverData = Data("cover-image-data".utf8)
         let storedBook = try store.upsert(
@@ -24,132 +24,135 @@ final class LibraryPersistenceTests: XCTestCase {
                 author: "Martin Fowler",
                 publisher: "Addison-Wesley",
                 year: "2018",
-                isbn: "9780134757599",
                 location: .chengdu,
                 createdAt: Date(timeIntervalSince1970: 1),
                 updatedAt: Date(timeIntervalSince1970: 2)
             ),
-            coverData: coverData
+            coverData: coverData,
+            repositoryID: repositoryID
         )
 
         XCTAssertNotNil(storedBook.coverAssetID)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: rootURL.appendingPathComponent("books/book-1.json").path))
         XCTAssertTrue(
             FileManager.default.fileExists(
-                atPath: rootURL.appendingPathComponent("covers/\(storedBook.coverAssetID!).bin").path
+                atPath: rootURL.appendingPathComponent("\(repositoryID)/books/book-1.json").path
+            )
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: rootURL.appendingPathComponent("\(repositoryID)/covers/\(storedBook.coverAssetID!).bin").path
             )
         )
 
         let metadataString = try XCTUnwrap(
-            String(data: Data(contentsOf: rootURL.appendingPathComponent("books/book-1.json")), encoding: .utf8)
+            String(
+                data: Data(contentsOf: rootURL.appendingPathComponent("\(repositoryID)/books/book-1.json")),
+                encoding: .utf8
+            )
         )
         XCTAssertFalse(metadataString.contains("coverData"))
-        XCTAssertEqual(try store.coverData(for: storedBook.coverAssetID!), coverData)
+        XCTAssertEqual(try store.coverData(for: storedBook.coverAssetID!, repositoryID: repositoryID), coverData)
     }
 
-    func testCloudSyncPrefersNewerMetadataAndCopiesCoverAsset() throws {
-        let localRootURL = try makeTemporaryDirectory()
-        let cloudRootURL = try makeTemporaryDirectory()
+    func testReplaceAllBooksGarbageCollectsStaleAssets() throws {
+        let rootURL = try makeTemporaryDirectory()
+        let store = LibraryCacheStore(rootURL: rootURL)
+        let repositoryID = "repo-2"
 
-        let localStore = LibraryDiskStore(rootURL: localRootURL)
-        let cloudStore = LibraryDiskStore(rootURL: cloudRootURL)
-
-        try localStore.prepareForUse(allowBundledSeed: false)
-        try cloudStore.prepareForUse(allowBundledSeed: false)
-
-        _ = try localStore.upsert(
+        let firstBook = try store.upsert(
             book: Book(
                 id: "book-1",
-                title: "领域驱动设计",
-                author: "Eric Evans",
-                publisher: "Pearson",
-                year: "2003",
-                isbn: "9780321125217",
+                title: "旧书",
                 location: .chengdu,
-                createdAt: Date(timeIntervalSince1970: 10),
-                updatedAt: Date(timeIntervalSince1970: 20)
+                createdAt: Date(timeIntervalSince1970: 1),
+                updatedAt: Date(timeIntervalSince1970: 2)
             ),
-            coverData: nil
+            coverData: Data("old-cover".utf8),
+            repositoryID: repositoryID
         )
 
-        let cloudBook = try cloudStore.upsert(
-            book: Book(
-                id: "book-1",
-                title: "领域驱动设计（修订版）",
-                author: "Eric Evans",
-                publisher: "Pearson",
-                year: "2026",
-                isbn: "9780321125217",
-                location: .chongqing,
-                createdAt: Date(timeIntervalSince1970: 10),
-                updatedAt: Date(timeIntervalSince1970: 30)
-            ),
-            coverData: Data("new-cover".utf8)
+        let staleCoverURL = rootURL.appendingPathComponent("\(repositoryID)/covers/\(firstBook.coverAssetID!).bin")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staleCoverURL.path))
+
+        let replacementBook = Book(
+            id: "book-2",
+            title: "新书",
+            location: .chongqing,
+            coverAssetID: "cover-new",
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 11)
         )
 
-        let engine = LibrarySyncEngine(
-            localStore: localStore,
-            configuration: CloudSyncConfiguration(
-                isEnabled: true,
-                overrideRootURL: cloudRootURL,
-                containerIdentifier: nil,
-                syncTarget: .personalCloud
-            )
+        try store.replaceAllBooks(
+            [replacementBook],
+            coverDataByAssetID: ["cover-new": Data("new-cover".utf8)],
+            repositoryID: repositoryID,
+            synchronizedAt: Date(timeIntervalSince1970: 99)
         )
 
-        let result = try engine.sync()
-        XCTAssertTrue(result.isCloudAvailable)
-
-        let localSnapshot = try localStore.loadSnapshot()
-        let synchronizedBook = try XCTUnwrap(localSnapshot.books.first)
-
-        XCTAssertEqual(synchronizedBook.title, "领域驱动设计（修订版）")
-        XCTAssertEqual(synchronizedBook.location, .chongqing)
-        XCTAssertEqual(synchronizedBook.coverAssetID, cloudBook.coverAssetID)
-        XCTAssertEqual(try localStore.coverData(for: try XCTUnwrap(cloudBook.coverAssetID)), Data("new-cover".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staleCoverURL.path))
+        XCTAssertEqual(
+            try store.coverData(for: "cover-new", repositoryID: repositoryID),
+            Data("new-cover".utf8)
+        )
     }
 
-    func testCloudSyncPropagatesDeletionTombstones() throws {
-        let localRootURL = try makeTemporaryDirectory()
-        let cloudRootURL = try makeTemporaryDirectory()
+    func testLegacyImporterLoadsStructuredBooksAndSkipsDeletedRecords() throws {
+        let rootURL = try makeTemporaryDirectory()
+        let booksDirectoryURL = rootURL.appendingPathComponent("books", isDirectory: true)
+        let coversDirectoryURL = rootURL.appendingPathComponent("covers", isDirectory: true)
+        let deletionsDirectoryURL = rootURL.appendingPathComponent("deletions", isDirectory: true)
+        try FileManager.default.createDirectory(at: booksDirectoryURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: coversDirectoryURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: deletionsDirectoryURL, withIntermediateDirectories: true)
 
-        let localStore = LibraryDiskStore(rootURL: localRootURL)
-        let cloudStore = LibraryDiskStore(rootURL: cloudRootURL)
-
-        try localStore.prepareForUse(allowBundledSeed: false)
-        try cloudStore.prepareForUse(allowBundledSeed: false)
-
-        let book = Book(
-            id: "book-2",
-            title: "代码整洁之道",
-            author: "Robert C. Martin",
-            publisher: "Prentice Hall",
-            year: "2008",
-            isbn: "9780132350884",
+        let activeBook = Book(
+            id: "active-book",
+            title: "保留",
+            author: "作者 A",
             location: .chengdu,
-            createdAt: Date(timeIntervalSince1970: 100),
-            updatedAt: Date(timeIntervalSince1970: 100)
+            coverAssetID: "cover-active",
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
+        let deletedBook = Book(
+            id: "deleted-book",
+            title: "删除",
+            author: "作者 B",
+            location: .chongqing,
+            createdAt: Date(timeIntervalSince1970: 3),
+            updatedAt: Date(timeIntervalSince1970: 4)
         )
 
-        _ = try localStore.upsert(book: book, coverData: nil)
-        _ = try cloudStore.upsert(book: book, coverData: nil)
-        try cloudStore.recordDeletion(for: book.id, deletedAt: Date(timeIntervalSince1970: 200))
-
-        let engine = LibrarySyncEngine(
-            localStore: localStore,
-            configuration: CloudSyncConfiguration(
-                isEnabled: true,
-                overrideRootURL: cloudRootURL,
-                containerIdentifier: nil,
-                syncTarget: .personalCloud
+        let encoder = LibraryJSONCodec.makeEncoder()
+        try encoder.encode(activeBook).write(
+            to: booksDirectoryURL.appendingPathComponent("active-book.json"),
+            options: [.atomic]
+        )
+        try encoder.encode(deletedBook).write(
+            to: booksDirectoryURL.appendingPathComponent("deleted-book.json"),
+            options: [.atomic]
+        )
+        try Data("active-cover".utf8).write(
+            to: coversDirectoryURL.appendingPathComponent("cover-active.bin"),
+            options: [.atomic]
+        )
+        try encoder.encode(
+            LegacyDeletionRecord(
+                id: "deleted-book",
+                deletedAt: Date(timeIntervalSince1970: 10)
             )
+        ).write(
+            to: deletionsDirectoryURL.appendingPathComponent("deleted-book.json"),
+            options: [.atomic]
         )
 
-        _ = try engine.sync()
+        let importer = LegacyLibraryImporter(storageRootURL: rootURL)
+        let importedBooks = try importer.loadBooks()
 
-        let localSnapshot = try localStore.loadSnapshot()
-        XCTAssertTrue(localSnapshot.books.isEmpty)
-        XCTAssertEqual(localSnapshot.tombstonesByID[book.id]?.deletedAt, Date(timeIntervalSince1970: 200))
+        XCTAssertEqual(importedBooks.count, 1)
+        XCTAssertEqual(importedBooks.first?.book.id, "active-book")
+        XCTAssertEqual(importedBooks.first?.coverData, Data("active-cover".utf8))
     }
 
     private func makeTemporaryDirectory() throws -> URL {

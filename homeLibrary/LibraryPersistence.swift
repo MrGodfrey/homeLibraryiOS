@@ -58,105 +58,55 @@ enum LibraryJSONCodec {
     }
 }
 
-nonisolated struct LibraryManifest: Codable, Equatable, Sendable {
-    nonisolated static let currentSchemaVersion = 2
+nonisolated struct LibraryCacheManifest: Codable, Equatable, Sendable {
+    nonisolated static let currentSchemaVersion = 1
 
     var schemaVersion: Int
-    var initializedAt: Date
-    var lastLocalMutationAt: Date?
+    var repositoryID: String
     var lastSuccessfulSyncAt: Date?
 
-    nonisolated static func makeNew(now: Date = .now) -> LibraryManifest {
-        LibraryManifest(
+    nonisolated static func makeNew(repositoryID: String) -> LibraryCacheManifest {
+        LibraryCacheManifest(
             schemaVersion: currentSchemaVersion,
-            initializedAt: now,
-            lastLocalMutationAt: nil,
+            repositoryID: repositoryID,
             lastSuccessfulSyncAt: nil
         )
     }
 }
 
-nonisolated struct LibrarySnapshot: Sendable {
+nonisolated struct LibraryCacheSnapshot: Sendable {
     let books: [Book]
-    let tombstonesByID: [String: BookDeletionTombstone]
-
-    nonisolated var booksByID: [String: Book] {
-        Dictionary(uniqueKeysWithValues: books.map { ($0.id, $0) })
-    }
 
     nonisolated var referencedAssetIDs: Set<String> {
         Set(books.compactMap(\.coverAssetID))
     }
 }
 
-nonisolated struct LibraryDiskStore: Sendable {
+nonisolated struct LegacyImportedBook: Sendable {
+    let book: Book
+    let coverData: Data?
+}
+
+nonisolated struct LegacyDeletionRecord: Codable, Sendable {
+    let id: String
+    let deletedAt: Date
+}
+
+nonisolated struct LibraryCacheStore: Sendable {
     let rootURL: URL
 
-    nonisolated var booksDirectoryURL: URL {
-        rootURL.appendingPathComponent("books", isDirectory: true)
-    }
+    nonisolated func prepareForUse(repositoryID: String) throws {
+        try ensureDirectoriesExist(for: repositoryID)
 
-    nonisolated var coversDirectoryURL: URL {
-        rootURL.appendingPathComponent("covers", isDirectory: true)
-    }
-
-    nonisolated var deletionsDirectoryURL: URL {
-        rootURL.appendingPathComponent("deletions", isDirectory: true)
-    }
-
-    nonisolated var manifestURL: URL {
-        rootURL.appendingPathComponent("manifest.json")
-    }
-
-    nonisolated var legacyBooksFileURL: URL {
-        rootURL.appendingPathComponent("books.json")
-    }
-
-    nonisolated func prepareForUse(
-        legacyBooksURL: URL? = nil,
-        bundledSeedURL: URL? = nil,
-        allowBundledSeed: Bool = true
-    ) throws {
-        try ensureDirectoriesExist()
-
-        if try readManifest() != nil {
-            return
+        if try readManifest(for: repositoryID) == nil {
+            try writeManifest(.makeNew(repositoryID: repositoryID), for: repositoryID)
         }
-
-        if try hasStructuredContent() {
-            try writeManifest(.makeNew())
-            try garbageCollectAssets()
-            return
-        }
-
-        if let sourceURL = preferredLegacySource(legacyBooksURL: legacyBooksURL, bundledSeedURL: allowBundledSeed ? bundledSeedURL : nil) {
-            try importLegacyLibrary(from: sourceURL)
-
-            if sourceURL.standardizedFileURL == legacyBooksFileURL.standardizedFileURL {
-                try archiveLegacyBooksFile(sourceURL)
-            }
-        } else {
-            try writeManifest(.makeNew())
-        }
-
-        try garbageCollectAssets()
     }
 
-    nonisolated func loadSnapshot() throws -> LibrarySnapshot {
-        try ensureDirectoriesExist()
+    nonisolated func loadSnapshot(repositoryID: String) throws -> LibraryCacheSnapshot {
+        try prepareForUse(repositoryID: repositoryID)
 
-        let books = try loadRecords(of: Book.self, from: booksDirectoryURL)
-        let tombstones = try loadRecords(of: BookDeletionTombstone.self, from: deletionsDirectoryURL)
-        let tombstonesByID = Dictionary(uniqueKeysWithValues: tombstones.map { ($0.id, $0) })
-
-        let visibleBooks = books
-            .filter { book in
-                guard let tombstone = tombstonesByID[book.id] else {
-                    return true
-                }
-
-                return tombstone.deletedAt < book.updatedAt
-            }
+        let books = try loadRecords(of: Book.self, from: booksDirectoryURL(for: repositoryID))
             .sorted { left, right in
                 if left.updatedAt != right.updatedAt {
                     return left.updatedAt > right.updatedAt
@@ -165,59 +115,54 @@ nonisolated struct LibraryDiskStore: Sendable {
                 return left.createdAt > right.createdAt
             }
 
-        return LibrarySnapshot(books: visibleBooks, tombstonesByID: tombstonesByID)
+        return LibraryCacheSnapshot(books: books)
     }
 
-    nonisolated func upsert(book: Book, coverData: Data?) throws -> Book {
-        try ensureWritableManifestExists()
+    @discardableResult
+    nonisolated func upsert(book: Book, coverData: Data?, repositoryID: String) throws -> Book {
+        try prepareForUse(repositoryID: repositoryID)
 
         var storedBook = book
-        storedBook.coverAssetID = try writeCoverAssetIfNeeded(coverData)
+        storedBook.coverAssetID = try writeCoverAssetIfNeeded(coverData, repositoryID: repositoryID)
 
-        try writeBookRecord(storedBook)
-        try removeTombstone(for: storedBook.id)
-        try mutateManifest { manifest in
-            manifest.lastLocalMutationAt = storedBook.updatedAt
-        }
-        try garbageCollectAssets()
-
+        let data = try LibraryJSONCodec.makeEncoder().encode(storedBook)
+        try data.write(to: bookRecordURL(for: storedBook.id, repositoryID: repositoryID), options: [.atomic])
+        try garbageCollectAssets(repositoryID: repositoryID)
         return storedBook
     }
 
-    nonisolated func recordDeletion(for bookID: String, deletedAt: Date) throws {
-        try ensureWritableManifestExists()
-        try removeBookRecord(for: bookID)
-        try writeTombstone(BookDeletionTombstone(id: bookID, deletedAt: deletedAt))
-        try mutateManifest { manifest in
-            manifest.lastLocalMutationAt = deletedAt
+    nonisolated func replaceAllBooks(
+        _ books: [Book],
+        coverDataByAssetID: [String: Data],
+        repositoryID: String,
+        synchronizedAt: Date?
+    ) throws {
+        try prepareForUse(repositoryID: repositoryID)
+
+        try resetBooksDirectory(for: repositoryID)
+
+        for book in books {
+            if let assetID = book.coverAssetID, let data = coverDataByAssetID[assetID] {
+                _ = try writeCoverAsset(data, preferredAssetID: assetID, repositoryID: repositoryID)
+            }
+
+            let data = try LibraryJSONCodec.makeEncoder().encode(book)
+            try data.write(to: bookRecordURL(for: book.id, repositoryID: repositoryID), options: [.atomic])
         }
-        try garbageCollectAssets()
+
+        try mutateManifest(for: repositoryID) { manifest in
+            manifest.lastSuccessfulSyncAt = synchronizedAt
+        }
+        try garbageCollectAssets(repositoryID: repositoryID)
     }
 
-    nonisolated func writeBookRecord(_ book: Book) throws {
-        try ensureDirectoriesExist()
-        let encoder = LibraryJSONCodec.makeEncoder()
-        let data = try encoder.encode(book)
-        try data.write(to: bookRecordURL(for: book.id), options: [.atomic])
+    nonisolated func removeBook(id: String, repositoryID: String) throws {
+        try removeItemIfPresent(at: bookRecordURL(for: id, repositoryID: repositoryID))
+        try garbageCollectAssets(repositoryID: repositoryID)
     }
 
-    nonisolated func removeBookRecord(for bookID: String) throws {
-        try removeItemIfPresent(at: bookRecordURL(for: bookID))
-    }
-
-    nonisolated func writeTombstone(_ tombstone: BookDeletionTombstone) throws {
-        try ensureDirectoriesExist()
-        let encoder = LibraryJSONCodec.makeEncoder()
-        let data = try encoder.encode(tombstone)
-        try data.write(to: tombstoneURL(for: tombstone.id), options: [.atomic])
-    }
-
-    nonisolated func removeTombstone(for bookID: String) throws {
-        try removeItemIfPresent(at: tombstoneURL(for: bookID))
-    }
-
-    nonisolated func coverData(for assetID: String) throws -> Data? {
-        let url = coverURL(for: assetID)
+    nonisolated func coverData(for assetID: String, repositoryID: String) throws -> Data? {
+        let url = coverURL(for: assetID, repositoryID: repositoryID)
 
         guard FileManager.default.fileExists(atPath: url.path) else {
             return nil
@@ -226,16 +171,27 @@ nonisolated struct LibraryDiskStore: Sendable {
         return try Data(contentsOf: url)
     }
 
-    nonisolated func hasCoverAsset(_ assetID: String) -> Bool {
-        FileManager.default.fileExists(atPath: coverURL(for: assetID).path)
+    nonisolated func markSyncSuccess(at date: Date, repositoryID: String) throws {
+        try prepareForUse(repositoryID: repositoryID)
+        try mutateManifest(for: repositoryID) { manifest in
+            manifest.lastSuccessfulSyncAt = date
+        }
+    }
+
+    nonisolated func clearRepository(_ repositoryID: String) throws {
+        try removeItemIfPresent(at: repositoryRootURL(for: repositoryID))
     }
 
     @discardableResult
-    nonisolated func writeCoverAsset(_ data: Data, preferredAssetID: String? = nil) throws -> String {
-        try ensureDirectoriesExist()
+    nonisolated func writeCoverAsset(
+        _ data: Data,
+        preferredAssetID: String? = nil,
+        repositoryID: String
+    ) throws -> String {
+        try prepareForUse(repositoryID: repositoryID)
 
         let assetID = preferredAssetID ?? makeCoverAssetID(from: data)
-        let assetURL = coverURL(for: assetID)
+        let assetURL = coverURL(for: assetID, repositoryID: repositoryID)
 
         if !FileManager.default.fileExists(atPath: assetURL.path) {
             try data.write(to: assetURL, options: [.atomic])
@@ -244,100 +200,29 @@ nonisolated struct LibraryDiskStore: Sendable {
         return assetID
     }
 
-    nonisolated func copyCoverAssetIfNeeded(_ assetID: String, from sourceStore: LibraryDiskStore) throws {
-        guard !hasCoverAsset(assetID), let data = try sourceStore.coverData(for: assetID) else {
-            return
-        }
+    nonisolated private func readManifest(for repositoryID: String) throws -> LibraryCacheManifest? {
+        let manifestURL = manifestURL(for: repositoryID)
 
-        try writeCoverAsset(data, preferredAssetID: assetID)
-    }
-
-    nonisolated func garbageCollectAssets() throws {
-        try ensureDirectoriesExist()
-
-        let snapshot = try loadSnapshot()
-        let referencedAssetIDs = snapshot.referencedAssetIDs
-        let assetFiles = try jsonAndBinaryFiles(in: coversDirectoryURL)
-
-        for assetFile in assetFiles where !referencedAssetIDs.contains(assetFile.deletingPathExtension().lastPathComponent) {
-            try removeItemIfPresent(at: assetFile)
-        }
-    }
-
-    nonisolated func markSyncSuccess(at date: Date) throws {
-        try ensureWritableManifestExists()
-        try mutateManifest { manifest in
-            manifest.lastSuccessfulSyncAt = date
-        }
-    }
-
-    nonisolated func readManifest() throws -> LibraryManifest? {
-        let fileManager = FileManager.default
-
-        guard fileManager.fileExists(atPath: manifestURL.path) else {
+        guard FileManager.default.fileExists(atPath: manifestURL.path) else {
             return nil
         }
 
         let data = try Data(contentsOf: manifestURL)
-        return try LibraryJSONCodec.makeDecoder().decode(LibraryManifest.self, from: data)
+        return try LibraryJSONCodec.makeDecoder().decode(LibraryCacheManifest.self, from: data)
     }
 
-    nonisolated private func importLegacyLibrary(from url: URL) throws {
-        let data = try Data(contentsOf: url)
-
-        if data.isEmpty {
-            try writeManifest(.makeNew())
-            return
-        }
-
-        let decoder = LibraryJSONCodec.makeDecoder()
-        let legacyBooks = try decoder.decode([LegacyBook].self, from: data)
-
-        for legacyBook in legacyBooks {
-            var migratedBook = Book(
-                id: legacyBook.id,
-                title: legacyBook.title,
-                author: legacyBook.author,
-                publisher: legacyBook.publisher,
-                year: legacyBook.year,
-                isbn: legacyBook.isbn,
-                location: legacyBook.location,
-                createdAt: legacyBook.createdAt,
-                updatedAt: legacyBook.updatedAt
-            )
-
-            if let coverData = legacyBook.coverData, !coverData.isEmpty {
-                migratedBook.coverAssetID = try writeCoverAsset(coverData)
-            }
-
-            try writeBookRecord(migratedBook)
-        }
-
-        try writeManifest(.makeNew())
+    nonisolated private func writeManifest(_ manifest: LibraryCacheManifest, for repositoryID: String) throws {
+        let data = try LibraryJSONCodec.makeEncoder().encode(manifest)
+        try data.write(to: manifestURL(for: repositoryID), options: [.atomic])
     }
 
-    nonisolated private func archiveLegacyBooksFile(_ sourceURL: URL) throws {
-        let backupURL = rootURL.appendingPathComponent("books.legacy.backup.json")
-
-        if FileManager.default.fileExists(atPath: backupURL.path) {
-            try removeItemIfPresent(at: backupURL)
-        }
-
-        try FileManager.default.moveItem(at: sourceURL, to: backupURL)
-    }
-
-    nonisolated private func preferredLegacySource(legacyBooksURL: URL?, bundledSeedURL: URL?) -> URL? {
-        let fileManager = FileManager.default
-
-        if let legacyBooksURL, fileManager.fileExists(atPath: legacyBooksURL.path) {
-            return legacyBooksURL
-        }
-
-        if let bundledSeedURL, fileManager.fileExists(atPath: bundledSeedURL.path) {
-            return bundledSeedURL
-        }
-
-        return nil
+    nonisolated private func mutateManifest(
+        for repositoryID: String,
+        _ mutate: (inout LibraryCacheManifest) -> Void
+    ) throws {
+        var manifest = try readManifest(for: repositoryID) ?? .makeNew(repositoryID: repositoryID)
+        mutate(&manifest)
+        try writeManifest(manifest, for: repositoryID)
     }
 
     nonisolated private func loadRecords<Record: Decodable>(of type: Record.Type, from directoryURL: URL) throws -> [Record] {
@@ -350,6 +235,63 @@ nonisolated struct LibraryDiskStore: Sendable {
         }
     }
 
+    nonisolated private func garbageCollectAssets(repositoryID: String) throws {
+        let snapshot = try loadSnapshot(repositoryID: repositoryID)
+        let referencedAssetIDs = snapshot.referencedAssetIDs
+        let assetFiles = try binaryFiles(in: coversDirectoryURL(for: repositoryID))
+
+        for assetFile in assetFiles where !referencedAssetIDs.contains(assetFile.deletingPathExtension().lastPathComponent) {
+            try removeItemIfPresent(at: assetFile)
+        }
+    }
+
+    nonisolated private func resetBooksDirectory(for repositoryID: String) throws {
+        let booksDirectoryURL = booksDirectoryURL(for: repositoryID)
+        try removeItemIfPresent(at: booksDirectoryURL)
+        try FileManager.default.createDirectory(at: booksDirectoryURL, withIntermediateDirectories: true)
+    }
+
+    nonisolated private func ensureDirectoriesExist(for repositoryID: String) throws {
+        let fileManager = FileManager.default
+
+        try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: repositoryRootURL(for: repositoryID), withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: booksDirectoryURL(for: repositoryID), withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: coversDirectoryURL(for: repositoryID), withIntermediateDirectories: true)
+    }
+
+    nonisolated private func writeCoverAssetIfNeeded(_ data: Data?, repositoryID: String) throws -> String? {
+        guard let data, !data.isEmpty else {
+            return nil
+        }
+
+        return try writeCoverAsset(data, repositoryID: repositoryID)
+    }
+
+    nonisolated private func repositoryRootURL(for repositoryID: String) -> URL {
+        rootURL.appendingPathComponent(repositoryID, isDirectory: true)
+    }
+
+    nonisolated private func booksDirectoryURL(for repositoryID: String) -> URL {
+        repositoryRootURL(for: repositoryID).appendingPathComponent("books", isDirectory: true)
+    }
+
+    nonisolated private func coversDirectoryURL(for repositoryID: String) -> URL {
+        repositoryRootURL(for: repositoryID).appendingPathComponent("covers", isDirectory: true)
+    }
+
+    nonisolated private func manifestURL(for repositoryID: String) -> URL {
+        repositoryRootURL(for: repositoryID).appendingPathComponent("manifest.json")
+    }
+
+    nonisolated private func bookRecordURL(for bookID: String, repositoryID: String) -> URL {
+        booksDirectoryURL(for: repositoryID).appendingPathComponent("\(bookID).json")
+    }
+
+    nonisolated private func coverURL(for assetID: String, repositoryID: String) -> URL {
+        coversDirectoryURL(for: repositoryID).appendingPathComponent("\(assetID).bin")
+    }
+
     nonisolated private func jsonFiles(in directoryURL: URL) throws -> [URL] {
         try FileManager.default.contentsOfDirectory(
             at: directoryURL,
@@ -360,74 +302,20 @@ nonisolated struct LibraryDiskStore: Sendable {
         .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
-    nonisolated private func jsonAndBinaryFiles(in directoryURL: URL) throws -> [URL] {
+    nonisolated private func binaryFiles(in directoryURL: URL) throws -> [URL] {
         try FileManager.default.contentsOfDirectory(
             at: directoryURL,
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         )
-        .filter { $0.hasDirectoryPath == false }
+        .filter { $0.pathExtension == "bin" }
         .sorted { $0.lastPathComponent < $1.lastPathComponent }
-    }
-
-    nonisolated private func writeManifest(_ manifest: LibraryManifest) throws {
-        let data = try LibraryJSONCodec.makeEncoder().encode(manifest)
-        try data.write(to: manifestURL, options: [.atomic])
-    }
-
-    nonisolated private func mutateManifest(_ mutate: (inout LibraryManifest) -> Void) throws {
-        var manifest = try readManifest() ?? .makeNew()
-        mutate(&manifest)
-        try writeManifest(manifest)
-    }
-
-    nonisolated private func ensureWritableManifestExists() throws {
-        try ensureDirectoriesExist()
-
-        if try readManifest() == nil {
-            try writeManifest(.makeNew())
-        }
-    }
-
-    nonisolated private func ensureDirectoriesExist() throws {
-        let fileManager = FileManager.default
-
-        try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: booksDirectoryURL, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: coversDirectoryURL, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: deletionsDirectoryURL, withIntermediateDirectories: true)
-    }
-
-    nonisolated private func hasStructuredContent() throws -> Bool {
-        try !jsonFiles(in: booksDirectoryURL).isEmpty ||
-            !jsonFiles(in: deletionsDirectoryURL).isEmpty ||
-            !jsonAndBinaryFiles(in: coversDirectoryURL).isEmpty
     }
 
     nonisolated private func makeCoverAssetID(from data: Data) -> String {
         let digest = SHA256.hash(data: data)
         let hex = digest.map { String(format: "%02x", $0) }.joined()
         return "cover-\(hex)"
-    }
-
-    nonisolated private func writeCoverAssetIfNeeded(_ data: Data?) throws -> String? {
-        guard let data, !data.isEmpty else {
-            return nil
-        }
-
-        return try writeCoverAsset(data)
-    }
-
-    nonisolated private func bookRecordURL(for bookID: String) -> URL {
-        booksDirectoryURL.appendingPathComponent("\(bookID).json")
-    }
-
-    nonisolated private func tombstoneURL(for bookID: String) -> URL {
-        deletionsDirectoryURL.appendingPathComponent("\(bookID).json")
-    }
-
-    nonisolated private func coverURL(for assetID: String) -> URL {
-        coversDirectoryURL.appendingPathComponent("\(assetID).bin")
     }
 
     nonisolated private func removeItemIfPresent(at url: URL) throws {
@@ -438,5 +326,127 @@ nonisolated struct LibraryDiskStore: Sendable {
         }
 
         try fileManager.removeItem(at: url)
+    }
+}
+
+nonisolated struct LegacyLibraryImporter: Sendable {
+    let storageRootURL: URL
+
+    nonisolated func loadBooks() throws -> [LegacyImportedBook] {
+        if try hasStructuredRecords() {
+            return try loadStructuredBooks()
+        }
+
+        if FileManager.default.fileExists(atPath: legacyBooksJSONURL.path) {
+            return try loadLegacyBooksJSON()
+        }
+
+        return []
+    }
+
+    nonisolated func cleanupAfterMigration() throws {
+        let urlsToRemove = [
+            storageRootURL.appendingPathComponent("books", isDirectory: true),
+            storageRootURL.appendingPathComponent("covers", isDirectory: true),
+            storageRootURL.appendingPathComponent("deletions", isDirectory: true),
+            storageRootURL.appendingPathComponent("manifest.json"),
+            legacyBooksJSONURL,
+            storageRootURL.appendingPathComponent("books.legacy.backup.json")
+        ]
+
+        for url in urlsToRemove where FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
+    }
+
+    nonisolated private var legacyBooksJSONURL: URL {
+        storageRootURL.appendingPathComponent("books.json")
+    }
+
+    nonisolated private func hasStructuredRecords() throws -> Bool {
+        let booksURL = storageRootURL.appendingPathComponent("books", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: booksURL.path) else {
+            return false
+        }
+
+        return try !FileManager.default.contentsOfDirectory(
+            at: booksURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ).isEmpty
+    }
+
+    nonisolated private func loadStructuredBooks() throws -> [LegacyImportedBook] {
+        let booksDirectoryURL = storageRootURL.appendingPathComponent("books", isDirectory: true)
+        let coversDirectoryURL = storageRootURL.appendingPathComponent("covers", isDirectory: true)
+        let deletionsDirectoryURL = storageRootURL.appendingPathComponent("deletions", isDirectory: true)
+        let decoder = LibraryJSONCodec.makeDecoder()
+
+        let tombstones = try FileManager.default.fileExists(atPath: deletionsDirectoryURL.path) ?
+            FileManager.default.contentsOfDirectory(
+                at: deletionsDirectoryURL,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+            .filter { $0.pathExtension == "json" }
+            .map { url in
+                try decoder.decode(LegacyDeletionRecord.self, from: Data(contentsOf: url))
+            } : []
+
+        let tombstonesByID = Dictionary(uniqueKeysWithValues: tombstones.map { ($0.id, $0) })
+        let bookURLs = try FileManager.default.contentsOfDirectory(
+            at: booksDirectoryURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+        .filter { $0.pathExtension == "json" }
+
+        var importedBooks: [LegacyImportedBook] = []
+
+        for url in bookURLs {
+            let book = try decoder.decode(Book.self, from: Data(contentsOf: url))
+
+            if let tombstone = tombstonesByID[book.id], tombstone.deletedAt >= book.updatedAt {
+                continue
+            }
+
+            let coverData: Data?
+            if let assetID = book.coverAssetID {
+                let assetURL = coversDirectoryURL.appendingPathComponent("\(assetID).bin")
+                coverData = FileManager.default.fileExists(atPath: assetURL.path) ? try Data(contentsOf: assetURL) : nil
+            } else {
+                coverData = nil
+            }
+
+            importedBooks.append(LegacyImportedBook(book: book, coverData: coverData))
+        }
+
+        return importedBooks
+    }
+
+    nonisolated private func loadLegacyBooksJSON() throws -> [LegacyImportedBook] {
+        let data = try Data(contentsOf: legacyBooksJSONURL)
+
+        guard !data.isEmpty else {
+            return []
+        }
+
+        let decoder = LibraryJSONCodec.makeDecoder()
+        let legacyBooks = try decoder.decode([LegacyBook].self, from: data)
+
+        return legacyBooks.map { legacyBook in
+            let book = Book(
+                id: legacyBook.id,
+                title: legacyBook.title,
+                author: legacyBook.author,
+                publisher: legacyBook.publisher,
+                year: legacyBook.year,
+                location: legacyBook.location,
+                createdAt: legacyBook.createdAt,
+                updatedAt: legacyBook.updatedAt
+            )
+
+            return LegacyImportedBook(book: book, coverData: legacyBook.coverData)
+        }
     }
 }
