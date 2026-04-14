@@ -129,8 +129,8 @@ async function main() {
         author: row.author ?? "",
         publisher: row.publisher ?? "",
         year: row.year ?? "",
-        isbn: row.isbn ?? "",
         location: row.location === "重庆" ? "重庆" : "成都",
+        customFields: row.isbn ? {ISBN: row.isbn} : {},
         coverData,
         createdAt: toISO8601(row.created_at),
         updatedAt: toISO8601(row.updated_at),
@@ -139,7 +139,14 @@ async function main() {
       console.log(`[${index + 1}/${rows.length}] ${row.title}${hasCover ? "" : " (no cover)"}`);
     }
 
-    await writeFile(outputPath, JSON.stringify(seedBooks, null, 2));
+    const seedPayload = {
+      schemaVersion: 1,
+      source: "cloudflare:d1/home-library+r2/homelibrary",
+      exportedAt: new Date().toISOString(),
+      books: seedBooks,
+    };
+
+    await writeFile(outputPath, JSON.stringify(seedPayload, null, 2));
     const outputStats = await stat(outputPath);
 
     console.log(`Seed file written: ${outputPath}`);

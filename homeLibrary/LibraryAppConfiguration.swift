@@ -43,7 +43,10 @@ struct LibraryAppConfiguration {
 
         return LibraryAppConfiguration(
             cacheStore: LibraryCacheStore(rootURL: storageRootURL.appendingPathComponent("cloudkit-cache", isDirectory: true)),
-            legacyImporter: LegacyLibraryImporter(storageRootURL: storageRootURL),
+            legacyImporter: LegacyLibraryImporter(
+                storageRootURL: storageRootURL,
+                bundleResourceURL: bundle.resourceURL
+            ),
             sessionStore: RepositorySessionStore(namespace: sessionNamespace),
             remoteService: cloudSyncEnabled ? CloudKitLibraryService(containerIdentifier: containerIdentifier) : nil,
             preferredOwnedRepositoryName: bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ??

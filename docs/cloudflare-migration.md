@@ -17,14 +17,19 @@
 
 ## 当前 app 的迁移方式
 
-当前 app 不再依赖 iCloud，改为本地 JSON 持久化。
+当前 app 默认支持两种导入落点：
+
+- 本地模式：首次空库时自动把种子数据导入本地缓存
+- CloudKit 模式：首次创建且远端空仓库时，自动把同一份种子数据写入 CloudKit
+
+导入完成后，后续开发迭代都直接使用本地缓存 / CloudKit 数据，不需要重复手动迁移旧库。
 
 迁移流程：
 
 1. 使用 `scripts/import_from_cloudflare.mjs`
 2. 从源仓库调用 `wrangler` 访问远端 D1 / R2
-3. 生成当前 app 可直接使用的 `homeLibrary/SeedBooks.json`
-4. app 首次启动且本地书库为空时，自动把 `SeedBooks.json` 复制到本地存储
+3. 生成当前 app 可直接使用的结构化种子文件 `homeLibrary/SeedBooks.json`
+4. app 运行时在空仓库上自动消费该种子文件
 
 ## 运行方法
 
@@ -49,4 +54,6 @@ homeLibrary/SeedBooks.json
 ## 注意
 
 - 该脚本依赖源仓库中的 `wrangler` 和当前机器上的 Cloudflare 登录态
-- 如果当前 app 已经在本地生成过书库文件，种子文件不会覆盖现有本地数据
+- `SeedBooks.json` 会随 app 一起打包，因此真机本地模式也能直接看到旧数据
+- `homeLibrary/SeedBooks.json` 是本地生成文件，默认不纳入 git，但只要文件存在就会被 Xcode 打包进 app bundle
+- 如果当前本地缓存或 CloudKit 仓库已经有数据，种子文件不会覆盖现有数据

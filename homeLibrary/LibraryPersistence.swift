@@ -87,6 +87,51 @@ nonisolated struct LegacyImportedBook: Sendable {
     let coverData: Data?
 }
 
+nonisolated struct SeedImportPackage: Codable, Sendable {
+    nonisolated static let currentSchemaVersion = 1
+
+    var schemaVersion: Int
+    var source: String?
+    var exportedAt: Date?
+    var books: [SeedImportBook]
+}
+
+nonisolated struct SeedImportBook: Codable, Sendable {
+    var id: String
+    var title: String
+    var author: String
+    var publisher: String
+    var year: String
+    var location: BookLocation
+    var customFields: [String: String]
+    var isbn: String?
+    var coverData: Data?
+    var createdAt: Date
+    var updatedAt: Date
+
+    nonisolated func makeImportedBook() -> LegacyImportedBook {
+        var mergedCustomFields = customFields
+
+        if let isbn, !isbn.trimmed.isEmpty, mergedCustomFields["ISBN"]?.nilIfEmpty == nil {
+            mergedCustomFields["ISBN"] = isbn.trimmed
+        }
+
+        let book = Book(
+            id: id,
+            title: title,
+            author: author,
+            publisher: publisher,
+            year: year,
+            location: location,
+            customFields: mergedCustomFields,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+
+        return LegacyImportedBook(book: book, coverData: coverData)
+    }
+}
+
 nonisolated struct LegacyDeletionRecord: Codable, Sendable {
     let id: String
     let deletedAt: Date
@@ -331,6 +376,7 @@ nonisolated struct LibraryCacheStore: Sendable {
 
 nonisolated struct LegacyLibraryImporter: Sendable {
     let storageRootURL: URL
+    let bundleResourceURL: URL?
 
     nonisolated func loadBooks() throws -> [LegacyImportedBook] {
         if try hasStructuredRecords() {
@@ -339,6 +385,14 @@ nonisolated struct LegacyLibraryImporter: Sendable {
 
         if FileManager.default.fileExists(atPath: legacyBooksJSONURL.path) {
             return try loadLegacyBooksJSON()
+        }
+
+        if let seedImportURL = firstExistingImportURL(in: [storageRootURL]) {
+            return try loadSeedBooksJSON(from: seedImportURL)
+        }
+
+        if let seedImportURL = firstExistingImportURL(in: bundleImportDirectories) {
+            return try loadSeedBooksJSON(from: seedImportURL)
         }
 
         return []
@@ -351,6 +405,8 @@ nonisolated struct LegacyLibraryImporter: Sendable {
             storageRootURL.appendingPathComponent("deletions", isDirectory: true),
             storageRootURL.appendingPathComponent("manifest.json"),
             legacyBooksJSONURL,
+            storageRootURL.appendingPathComponent("SeedBooks.json"),
+            storageRootURL.appendingPathComponent("LibraryImport.json"),
             storageRootURL.appendingPathComponent("books.legacy.backup.json")
         ]
 
@@ -361,6 +417,14 @@ nonisolated struct LegacyLibraryImporter: Sendable {
 
     nonisolated private var legacyBooksJSONURL: URL {
         storageRootURL.appendingPathComponent("books.json")
+    }
+
+    nonisolated private var bundleImportDirectories: [URL] {
+        guard let bundleResourceURL else {
+            return []
+        }
+
+        return [bundleResourceURL]
     }
 
     nonisolated private func hasStructuredRecords() throws -> Bool {
@@ -434,19 +498,66 @@ nonisolated struct LegacyLibraryImporter: Sendable {
         let decoder = LibraryJSONCodec.makeDecoder()
         let legacyBooks = try decoder.decode([LegacyBook].self, from: data)
 
-        return legacyBooks.map { legacyBook in
-            let book = Book(
-                id: legacyBook.id,
-                title: legacyBook.title,
-                author: legacyBook.author,
-                publisher: legacyBook.publisher,
-                year: legacyBook.year,
-                location: legacyBook.location,
-                createdAt: legacyBook.createdAt,
-                updatedAt: legacyBook.updatedAt
-            )
+        return legacyBooks.map(makeImportedBook(from:))
+    }
 
-            return LegacyImportedBook(book: book, coverData: legacyBook.coverData)
+    nonisolated private func loadSeedBooksJSON(from url: URL) throws -> [LegacyImportedBook] {
+        let data = try Data(contentsOf: url)
+
+        guard !data.isEmpty else {
+            return []
         }
+
+        let packageDecoder = LibraryJSONCodec.makeDecoder()
+        if let package = try? packageDecoder.decode(SeedImportPackage.self, from: data) {
+            return package.books.map { $0.makeImportedBook() }
+        }
+
+        let legacyDecoder = LibraryJSONCodec.makeDecoder()
+        if let legacyBooks = try? legacyDecoder.decode([LegacyBook].self, from: data) {
+            return legacyBooks.map(makeImportedBook(from:))
+        }
+
+        throw CocoaError(.fileReadCorruptFile)
+    }
+
+    nonisolated private func firstExistingImportURL(in directories: [URL]) -> URL? {
+        let fileManager = FileManager.default
+
+        for directoryURL in directories {
+            let libraryImportURL = directoryURL.appendingPathComponent("LibraryImport.json")
+            if fileManager.fileExists(atPath: libraryImportURL.path) {
+                return libraryImportURL
+            }
+
+            let seedBooksURL = directoryURL.appendingPathComponent("SeedBooks.json")
+            if fileManager.fileExists(atPath: seedBooksURL.path) {
+                return seedBooksURL
+            }
+        }
+
+        return nil
+    }
+
+    nonisolated private func makeImportedBook(from legacyBook: LegacyBook) -> LegacyImportedBook {
+        var customFields: [String: String] = [:]
+
+        if !legacyBook.isbn.trimmed.isEmpty {
+            customFields["ISBN"] = legacyBook.isbn.trimmed
+        }
+
+        let book = Book(
+            id: legacyBook.id,
+            title: legacyBook.title,
+            author: legacyBook.author,
+            publisher: legacyBook.publisher,
+            year: legacyBook.year,
+            location: legacyBook.location,
+            customFields: customFields,
+            createdAt: legacyBook.createdAt,
+            updatedAt: legacyBook.updatedAt
+        )
+
+        return LegacyImportedBook(book: book, coverData: legacyBook.coverData)
     }
 }

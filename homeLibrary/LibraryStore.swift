@@ -99,15 +99,15 @@ final class LibraryStore: ObservableObject {
         do {
             let repository = try await ensureCurrentRepositoryIfNeeded()
 
-            try await reloadFromCache(repositoryID: repository.id)
-
-            if repository.isOwner {
-                try await migrateLegacyBooksIfNeeded(into: repository)
-            }
-
             if remoteService != nil, repository.role != .localOnly {
+                if repository.isOwner {
+                    try await seedOwnedRepositoryIfNeeded(into: repository)
+                }
+
                 try await refreshFromCloud()
             } else {
+                try await seedLocalRepositoryIfNeeded(into: repository)
+                try await reloadFromCache(repositoryID: repository.id)
                 syncStatus = .unavailable
             }
 
@@ -431,7 +431,7 @@ final class LibraryStore: ObservableObject {
         return repository.role == .localOnly
     }
 
-    private func migrateLegacyBooksIfNeeded(into repository: LibraryRepositoryReference) async throws {
+    private func seedOwnedRepositoryIfNeeded(into repository: LibraryRepositoryReference) async throws {
         guard let remoteService else {
             return
         }
@@ -462,6 +462,45 @@ final class LibraryStore: ObservableObject {
 
         try await Task.detached(priority: .utility) {
             try importer.cleanupAfterMigration()
+        }.value
+
+        sessionStore.markLegacyMigrationCompleted(for: repository.id)
+    }
+
+    private func seedLocalRepositoryIfNeeded(into repository: LibraryRepositoryReference) async throws {
+        guard repository.role == .localOnly else {
+            return
+        }
+
+        guard !sessionStore.hasCompletedLegacyMigration(for: repository.id) else {
+            return
+        }
+
+        let existingSnapshot = try await loadCacheSnapshot(repositoryID: repository.id)
+        guard existingSnapshot.books.isEmpty else {
+            sessionStore.markLegacyMigrationCompleted(for: repository.id)
+            return
+        }
+
+        let importer = configuration.legacyImporter
+        let importedBooks = try await Task.detached(priority: .utility) {
+            try importer.loadBooks()
+        }.value
+
+        guard !importedBooks.isEmpty else {
+            sessionStore.markLegacyMigrationCompleted(for: repository.id)
+            return
+        }
+
+        let cacheStore = self.cacheStore
+        try await Task.detached(priority: .utility) {
+            for imported in importedBooks.sorted(by: { $0.book.updatedAt < $1.book.updatedAt }) {
+                _ = try cacheStore.upsert(
+                    book: imported.book,
+                    coverData: imported.coverData,
+                    repositoryID: repository.id
+                )
+            }
         }.value
 
         sessionStore.markLegacyMigrationCompleted(for: repository.id)
@@ -542,13 +581,17 @@ final class LibraryStore: ObservableObject {
     }
 
     private func reloadFromCache(repositoryID: String) async throws {
-        let cacheStore = self.cacheStore
-        let snapshot = try await Task.detached(priority: .utility) {
-            try cacheStore.loadSnapshot(repositoryID: repositoryID)
-        }.value
+        let snapshot = try await loadCacheSnapshot(repositoryID: repositoryID)
 
         books = snapshot.books
         coverCache = coverCache.filter { snapshot.referencedAssetIDs.contains($0.key) }
+    }
+
+    private func loadCacheSnapshot(repositoryID: String) async throws -> LibraryCacheSnapshot {
+        let cacheStore = self.cacheStore
+        return try await Task.detached(priority: .utility) {
+            try cacheStore.loadSnapshot(repositoryID: repositoryID)
+        }.value
     }
 
     private func persistSessionState() {
