@@ -499,7 +499,7 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         }
     }
 
-    private static func makeRepositoryDescriptor(from record: CKRecord) throws -> RepositoryDescriptor {
+    nonisolated private static func makeRepositoryDescriptor(from record: CKRecord) throws -> RepositoryDescriptor {
         RepositoryDescriptor(
             id: record.recordID.recordName,
             name: try requireStringField(RepositoryField.name, in: record),
@@ -508,7 +508,7 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         )
     }
 
-    private static func makeRemoteBookSnapshot(
+    nonisolated private static func makeRemoteBookSnapshot(
         from record: CKRecord,
         fallbackCoverData: Data? = nil
     ) throws -> RemoteBookSnapshot {
@@ -531,7 +531,7 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         return RemoteBookSnapshot(book: book, coverData: coverData)
     }
 
-    private static func requireStringField(_ key: String, in record: CKRecord) throws -> String {
+    nonisolated private static func requireStringField(_ key: String, in record: CKRecord) throws -> String {
         guard let value = record[key] as? String, !value.trimmed.isEmpty else {
             throw LibraryRemoteServiceError.invalidCloudRecord
         }
@@ -539,7 +539,7 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         return value
     }
 
-    private static func requireDateField(_ key: String, in record: CKRecord) throws -> Date {
+    nonisolated private static func requireDateField(_ key: String, in record: CKRecord) throws -> Date {
         guard let value = record[key] as? Date else {
             throw LibraryRemoteServiceError.invalidCloudRecord
         }
@@ -547,7 +547,7 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         return value
     }
 
-    private static func encodePayload(_ payload: BookPayload) throws -> String {
+    nonisolated private static func encodePayload(_ payload: BookPayload) throws -> String {
         let data = try JSONEncoder().encode(payload)
 
         guard let string = String(data: data, encoding: .utf8) else {
@@ -557,7 +557,7 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         return string
     }
 
-    private static func decodePayload(_ string: String) throws -> BookPayload {
+    nonisolated private static func decodePayload(_ string: String) throws -> BookPayload {
         guard let data = string.data(using: .utf8) else {
             throw LibraryRemoteServiceError.invalidCloudRecord
         }
@@ -565,13 +565,13 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         return try JSONDecoder().decode(BookPayload.self, from: data)
     }
 
-    private static func copyWritableFields(from source: CKRecord, to destination: CKRecord) {
+    nonisolated private static func copyWritableFields(from source: CKRecord, to destination: CKRecord) {
         for key in source.allKeys() {
             destination[key] = source[key]
         }
     }
 
-    private static func extractBookID(from recordName: String) -> String {
+    nonisolated private static func extractBookID(from recordName: String) -> String {
         guard let separatorIndex = recordName.firstIndex(of: "|") else {
             return recordName
         }
@@ -579,11 +579,11 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         return String(recordName[recordName.index(after: separatorIndex)...])
     }
 
-    private static func bookRecordName(repositoryID: String, bookID: String) -> String {
+    nonisolated private static func bookRecordName(repositoryID: String, bookID: String) -> String {
         "\(repositoryID)|\(bookID)"
     }
 
-    private static func loadAssetData(from asset: CKAsset?) -> Data? {
+    nonisolated private static func loadAssetData(from asset: CKAsset?) -> Data? {
         guard let url = asset?.fileURL else {
             return nil
         }
@@ -591,14 +591,14 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         return try? Data(contentsOf: url)
     }
 
-    private static func generateCredentials() -> RepositoryCredentials {
+    nonisolated private static func generateCredentials() -> RepositoryCredentials {
         RepositoryCredentials(
             account: "HL\(Self.makeRandomCode(length: 8))",
             password: Self.makeRandomPassword()
         )
     }
 
-    private static func makeRandomPassword() -> String {
+    nonisolated private static func makeRandomPassword() -> String {
         [
             makeRandomCode(length: 4),
             makeRandomCode(length: 4),
@@ -607,33 +607,33 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         .joined(separator: "-")
     }
 
-    private static func makeRandomCode(length: Int) -> String {
+    nonisolated private static func makeRandomCode(length: Int) -> String {
         let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
         return String((0..<length).compactMap { _ in alphabet.randomElement() })
     }
 
-    private static func makeRepositoryID() -> String {
+    nonisolated private static func makeRepositoryID() -> String {
         "repo.\(UUID().uuidString)"
     }
 
-    private static func makeSalt() -> String {
+    nonisolated private static func makeSalt() -> String {
         UUID().uuidString.replacingOccurrences(of: "-", with: "")
     }
 
-    private static func makePasswordHash(password: String, salt: String) -> String {
+    nonisolated private static func makePasswordHash(password: String, salt: String) -> String {
         let data = Data("\(salt):\(password)".utf8)
         let digest = SHA256.hash(data: data)
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func makeCoverAssetID(from data: Data) -> String {
+    nonisolated private static func makeCoverAssetID(from data: Data) -> String {
         let digest = SHA256.hash(data: data)
         let hex = digest.map { String(format: "%02x", $0) }.joined()
         return "cover-\(hex)"
     }
 }
 
-private final class TemporaryAssetFile {
+nonisolated private struct TemporaryAssetFile: Sendable {
     let url: URL
 
     init(data: Data, fileExtension: String) {
