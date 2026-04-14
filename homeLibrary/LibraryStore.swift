@@ -153,13 +153,16 @@ final class LibraryStore: ObservableObject {
     private func readBooks() throws -> [Book] {
         let fileManager = FileManager.default
 
-        guard fileManager.fileExists(atPath: persistenceURL.path) else {
-            return []
+        if !fileManager.fileExists(atPath: persistenceURL.path) {
+            try bootstrapFromBundledSeedIfNeeded()
+
+            if !fileManager.fileExists(atPath: persistenceURL.path) {
+                return []
+            }
         }
 
         let data = try Data(contentsOf: persistenceURL)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        let decoder = Self.makeJSONDecoder()
 
         let books = try decoder.decode([Book].self, from: data)
 
@@ -201,10 +204,65 @@ final class LibraryStore: ObservableObject {
         return appDirectory.appendingPathComponent("books.json")
     }
 
+    private func bootstrapFromBundledSeedIfNeeded() throws {
+        guard let bundledSeedURL = Bundle.main.url(forResource: "SeedBooks", withExtension: "json") else {
+            return
+        }
+
+        let seedData = try Data(contentsOf: bundledSeedURL)
+        guard !seedData.isEmpty else {
+            return
+        }
+
+        try Self.ensureParentDirectoryExists(for: persistenceURL)
+        try seedData.write(to: persistenceURL, options: [.atomic])
+    }
+
     private static func ensureParentDirectoryExists(for url: URL) throws {
         let directoryURL = url.deletingLastPathComponent()
 
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true, attributes: nil)
+    }
+
+    private static func makeJSONDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+
+        decoder.dateDecodingStrategy = .custom { container in
+            let singleValueContainer = try container.singleValueContainer()
+            let value = try singleValueContainer.decode(String.self)
+
+            if let date = Self.parseDate(value) {
+                return date
+            }
+
+            throw DecodingError.dataCorruptedError(
+                in: singleValueContainer,
+                debugDescription: "Unsupported date format: \(value)"
+            )
+        }
+
+        return decoder
+    }
+
+    private nonisolated static func parseDate(_ value: String) -> Date? {
+        let iso8601FormatterWithFractionalSeconds = ISO8601DateFormatter()
+        iso8601FormatterWithFractionalSeconds.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = iso8601FormatterWithFractionalSeconds.date(from: value) {
+            return date
+        }
+
+        let iso8601Formatter = ISO8601DateFormatter()
+        iso8601Formatter.formatOptions = [.withInternetDateTime]
+        if let date = iso8601Formatter.date(from: value) {
+            return date
+        }
+
+        let sqliteFormatter = DateFormatter()
+        sqliteFormatter.locale = Locale(identifier: "en_US_POSIX")
+        sqliteFormatter.timeZone = TimeZone(secondsFromGMT: 0)
+        sqliteFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+
+        return sqliteFormatter.date(from: value)
     }
 }
 

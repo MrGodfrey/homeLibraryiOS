@@ -39,11 +39,13 @@
 
 ## Current Focus
 
-本地持久化版本已经落地，当前剩余的是在完整 Xcode 环境里做一次实际运行确认。
+Cloudflare 历史数据已经迁移为当前 app 的本地种子文件，当前剩余的是在完整 Xcode 环境里做一次实际运行确认。
 
 ## Validation Notes
 
 - 已通过命令行静态检查：
   `swiftc -typecheck -sdk /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk homeLibrary/Book.swift homeLibrary/LibraryStore.swift homeLibrary/ISBNLookupService.swift homeLibrary/ISBNScannerView.swift homeLibrary/BookEditorView.swift homeLibrary/ContentView.swift homeLibrary/homeLibraryApp.swift`
 - 本地数据文件路径为应用沙盒 `Application Support/homeLibrary/books.json`
+- 已完成 Cloudflare 数据迁移：导出 `110` 本书和 `110` 张封面，生成 `homeLibrary/SeedBooks.json`
+- 已补充迁移说明：`docs/cloudflare-migration.md`
 - 当前环境缺少完整 Xcode，`xcodebuild` 仍无法执行；现有开发目录为 `/Library/Developer/CommandLineTools`
