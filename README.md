@@ -13,6 +13,8 @@
 - 从 iPhone 相册上传或更换封面
 - 使用 CloudKit 同步当前仓库
 - 由仓库拥有者生成账号密码，其他用户输入后加入同一仓库并共同修改
+- 本地模式空库时可自动导入结构化旧库种子
+- CloudKit 自有仓库首次为空时可自动导入同一份旧库种子
 - 首次启动自动把旧本地历史数据迁移到 CloudKit，并清理旧结构
 
 ## 这次重构的核心变化
@@ -115,6 +117,7 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 
 - 旧结构化目录 `books/`、`covers/`、`deletions/`
 - 旧单文件 `books.json`
+- 结构化种子文件 `SeedBooks.json`
 
 如果当前远端仓库还是空的，就会：
 
@@ -124,6 +127,26 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 4. 清理旧本地结构
 
 迁移完成后，项目运行时表现为只有新数据结构。
+
+如果当前运行在本地模式，应用也会在本地缓存为空时自动消费 `SeedBooks.json`，这样真机 / Simulator 在不开 CloudKit 的情况下也能直接看到旧书库。
+
+`SeedBooks.json` 是当前推荐的长期迁移入口：
+
+- 可由 `scripts/import_from_cloudflare.mjs` 从旧 Cloudflare D1 / R2 生成
+- 生成后放在 `homeLibrary/SeedBooks.json`
+- 文件存在时会随 app 一起打包进 bundle
+- 仓库已有数据时不会覆盖
+- 导入标记会持久化，后续开发迭代不需要反复处理旧数据
+
+Cloudflare 导出命令：
+
+```bash
+node scripts/import_from_cloudflare.mjs \
+  --source-repo /Users/wangyu/code/Home-library \
+  --output homeLibrary/SeedBooks.json
+```
+
+脚本会输出结构化 seed 包，封面以 base64 嵌入；旧库中的 `isbn` 会在导入时写入 `customFields["ISBN"]`。
 
 ## 开发说明
 
@@ -149,8 +172,14 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 - 不挂 iCloud entitlement
 - 运行时默认本地模式
 - 本地缓存与会话落到 `Application Support/homeLibrary/local-debug/`
+- 若 app bundle 中存在 `SeedBooks.json`，空本地库会自动导入这份种子
 
 等 CloudKit capability 可用后，再把 Scheme 的 Run 配置切到 `Release`，就会恢复 CloudKit 容器与真实同步验证。
+
+补充：
+
+- `homeLibrary/SeedBooks.json` 默认被 `.gitignore` 忽略，作为本地生成工件管理
+- 即使不入库，只要文件存在，Xcode 仍会把它拷贝进 app bundle
 
 ### CloudKit 索引
 
