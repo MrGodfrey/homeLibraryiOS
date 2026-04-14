@@ -92,7 +92,8 @@ final class LibraryPersistenceTests: XCTestCase {
             configuration: CloudSyncConfiguration(
                 isEnabled: true,
                 overrideRootURL: cloudRootURL,
-                containerIdentifier: nil
+                containerIdentifier: nil,
+                syncTarget: .personalCloud
             )
         )
 
@@ -139,7 +140,8 @@ final class LibraryPersistenceTests: XCTestCase {
             configuration: CloudSyncConfiguration(
                 isEnabled: true,
                 overrideRootURL: cloudRootURL,
-                containerIdentifier: nil
+                containerIdentifier: nil,
+                syncTarget: .personalCloud
             )
         )
 

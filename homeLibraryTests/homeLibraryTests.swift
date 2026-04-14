@@ -69,4 +69,28 @@ final class homeLibraryTests: XCTestCase {
         XCTAssertEqual(ISBNLookupService.extractISBN(from: payload), "9787111122334")
     }
 
+    func testSyncSettingsStorePersistsSharedFolderSelectionPerNamespace() throws {
+        let suiteName = "homeLibraryTests.syncSettings.\(UUID().uuidString)"
+        let userDefaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        userDefaults.removePersistentDomain(forName: suiteName)
+        addTeardownBlock {
+            userDefaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let store = LibrarySyncSettingsStore(namespace: "primary")
+        let bookmark = SharedLibraryFolderBookmark(
+            displayName: "家庭共享书库",
+            bookmarkData: Data("bookmark".utf8)
+        )
+        let target = LibrarySyncTarget(mode: .sharedFolder, sharedFolderBookmark: bookmark)
+
+        store.save(target, userDefaults: userDefaults)
+
+        XCTAssertEqual(store.load(userDefaults: userDefaults), target)
+        XCTAssertEqual(
+            LibrarySyncSettingsStore(namespace: "secondary").load(userDefaults: userDefaults),
+            .personalCloud
+        )
+    }
+
 }

@@ -19,28 +19,28 @@ nonisolated enum LibrarySyncStatus: Equatable {
         case .idle:
             return "等待同步"
         case .unavailable:
-            return "云同步未开启"
+            return "同步未开启"
         case .syncing:
-            return "云端同步中"
+            return "同步中"
         case .upToDate(let date):
             return "已同步 \(Self.relativeFormatter.localizedString(for: date, relativeTo: .now))"
         case .failed:
-            return "云同步失败"
+            return "同步失败"
         }
     }
 
     var systemImageName: String {
         switch self {
         case .idle:
-            return "icloud"
+            return "circle.dashed"
         case .unavailable:
-            return "icloud.slash"
+            return "slash.circle"
         case .syncing:
-            return "arrow.triangle.2.circlepath.icloud"
+            return "arrow.triangle.2.circlepath"
         case .upToDate:
-            return "checkmark.icloud"
+            return "checkmark.circle"
         case .failed:
-            return "exclamationmark.icloud"
+            return "exclamationmark.circle"
         }
     }
 
@@ -55,24 +55,63 @@ nonisolated struct CloudSyncConfiguration: Sendable {
     var isEnabled: Bool
     var overrideRootURL: URL?
     var containerIdentifier: String?
+    var syncTarget: LibrarySyncTarget
 
-    nonisolated func resolveCloudStore() -> LibraryDiskStore? {
+    nonisolated func withResolvedCloudStore<Result>(
+        _ body: (LibraryDiskStore?) throws -> Result
+    ) throws -> Result {
         guard isEnabled else {
-            return nil
+            return try body(nil)
         }
 
         if let overrideRootURL {
-            return LibraryDiskStore(rootURL: overrideRootURL)
+            return try body(LibraryDiskStore(rootURL: overrideRootURL))
         }
 
-        guard let containerIdentifier,
-              let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerIdentifier)
-        else {
-            return nil
+        if let sharedFolderBookmark = syncTarget.activeSharedFolderBookmark {
+            return try withResolvedSharedFolder(sharedFolderBookmark, body: body)
+        }
+
+        guard let containerIdentifier else {
+            return try body(nil)
+        }
+
+        guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerIdentifier) else {
+            return try body(nil)
         }
 
         let documentsURL = containerURL.appendingPathComponent("Documents", isDirectory: true)
-        return LibraryDiskStore(rootURL: documentsURL.appendingPathComponent("homeLibrarySync", isDirectory: true))
+        return try body(LibraryDiskStore(rootURL: documentsURL.appendingPathComponent("homeLibrarySync", isDirectory: true)))
+    }
+
+    nonisolated private func withResolvedSharedFolder<Result>(
+        _ bookmark: SharedLibraryFolderBookmark,
+        body: (LibraryDiskStore?) throws -> Result
+    ) throws -> Result {
+        var isStale = false
+        let folderURL = try URL(
+            resolvingBookmarkData: bookmark.bookmarkData,
+            options: SharedLibraryBookmarkAccess.resolutionOptions,
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        )
+
+        let didStartAccess = folderURL.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccess {
+                folderURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        guard didStartAccess || FileManager.default.fileExists(atPath: folderURL.path) else {
+            throw SharedLibrarySyncError.cannotAccessFolder(bookmark.displayName)
+        }
+
+        if isStale == false || FileManager.default.fileExists(atPath: folderURL.path) {
+            return try body(LibraryDiskStore(rootURL: folderURL))
+        }
+
+        throw SharedLibrarySyncError.missingSharedFolder
     }
 }
 
@@ -86,23 +125,25 @@ nonisolated struct LibrarySyncEngine: Sendable {
     let configuration: CloudSyncConfiguration
 
     nonisolated func sync() throws -> LibrarySyncResult {
-        guard let cloudStore = configuration.resolveCloudStore() else {
-            return LibrarySyncResult(isCloudAvailable: false, synchronizedAt: nil)
+        try configuration.withResolvedCloudStore { cloudStore in
+            guard let cloudStore else {
+                return LibrarySyncResult(isCloudAvailable: false, synchronizedAt: nil)
+            }
+
+            try localStore.prepareForUse(allowBundledSeed: false)
+            try cloudStore.prepareForUse(allowBundledSeed: false)
+
+            let localSnapshot = try localStore.loadSnapshot()
+            let cloudSnapshot = try cloudStore.loadSnapshot()
+
+            try merge(localSnapshot: localSnapshot, cloudSnapshot: cloudSnapshot, localStore: localStore, cloudStore: cloudStore)
+
+            let syncDate = Date()
+            try localStore.markSyncSuccess(at: syncDate)
+            try cloudStore.markSyncSuccess(at: syncDate)
+
+            return LibrarySyncResult(isCloudAvailable: true, synchronizedAt: syncDate)
         }
-
-        try localStore.prepareForUse(allowBundledSeed: false)
-        try cloudStore.prepareForUse(allowBundledSeed: false)
-
-        let localSnapshot = try localStore.loadSnapshot()
-        let cloudSnapshot = try cloudStore.loadSnapshot()
-
-        try merge(localSnapshot: localSnapshot, cloudSnapshot: cloudSnapshot, localStore: localStore, cloudStore: cloudStore)
-
-        let syncDate = Date()
-        try localStore.markSyncSuccess(at: syncDate)
-        try cloudStore.markSyncSuccess(at: syncDate)
-
-        return LibrarySyncResult(isCloudAvailable: true, synchronizedAt: syncDate)
     }
 
     nonisolated private func merge(

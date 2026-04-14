@@ -14,6 +14,8 @@ nonisolated struct LibraryAppConfiguration: Sendable {
     let legacyBooksURL: URL?
     let bundledSeedURL: URL?
     let allowBundledSeed: Bool
+    let initialSyncTarget: LibrarySyncTarget
+    let syncSettingsStore: LibrarySyncSettingsStore
     let cloudSyncConfiguration: CloudSyncConfiguration
 
     nonisolated static func live(bundle: Bundle = .main, processInfo: ProcessInfo = .processInfo) -> LibraryAppConfiguration {
@@ -42,16 +44,24 @@ nonisolated struct LibraryAppConfiguration: Sendable {
 
         let cloudSyncEnabled = environment["HOME_LIBRARY_DISABLE_CLOUD_SYNC"] != "1"
         let allowBundledSeed = environment["HOME_LIBRARY_DISABLE_BUNDLED_SEED"] != "1"
+        let syncNamespace = environment["HOME_LIBRARY_SYNC_NAMESPACE"]?.nilIfEmpty ??
+            environment["HOME_LIBRARY_STORAGE_NAMESPACE"]?.nilIfEmpty ??
+            "default"
+        let syncSettingsStore = LibrarySyncSettingsStore(namespace: syncNamespace)
+        let initialSyncTarget = syncSettingsStore.load()
 
         return LibraryAppConfiguration(
             localStore: LibraryDiskStore(rootURL: localRootURL),
             legacyBooksURL: legacyBooksURL,
             bundledSeedURL: bundle.url(forResource: "SeedBooks", withExtension: "json"),
             allowBundledSeed: allowBundledSeed,
+            initialSyncTarget: initialSyncTarget,
+            syncSettingsStore: syncSettingsStore,
             cloudSyncConfiguration: CloudSyncConfiguration(
                 isEnabled: cloudSyncEnabled,
                 overrideRootURL: cloudRootOverrideURL,
-                containerIdentifier: defaultCloudContainerIdentifier
+                containerIdentifier: defaultCloudContainerIdentifier,
+                syncTarget: initialSyncTarget
             )
         )
     }

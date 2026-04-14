@@ -16,23 +16,39 @@ final class LibraryStore: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var isSaving = false
     @Published private(set) var syncStatus: LibrarySyncStatus
+    @Published private(set) var syncTarget: LibrarySyncTarget
     @Published var alertMessage: String?
 
     private let configuration: LibraryAppConfiguration
     private let localStore: LibraryDiskStore
-    private let syncEngine: LibrarySyncEngine
     private var hasLoaded = false
     private var coverCache: [String: Data] = [:]
 
     init(configuration: LibraryAppConfiguration) {
         self.configuration = configuration
         self.localStore = configuration.localStore
-        self.syncEngine = LibrarySyncEngine(localStore: configuration.localStore, configuration: configuration.cloudSyncConfiguration)
+        self.syncTarget = configuration.initialSyncTarget
         self.syncStatus = configuration.cloudSyncConfiguration.isEnabled ? .idle : .unavailable
     }
 
     var visibleBooks: [Book] {
         LibraryFilter.filteredBooks(from: books, query: searchText, tab: activeTab)
+    }
+
+    var syncDestinationTitle: String {
+        syncTarget.destinationTitle
+    }
+
+    var syncDestinationSubtitle: String {
+        syncTarget.destinationSubtitle
+    }
+
+    var hasStoredSharedFolder: Bool {
+        syncTarget.hasStoredSharedFolder
+    }
+
+    var usesSharedFolder: Bool {
+        syncTarget.usesSharedFolder
     }
 
     func loadBooksIfNeeded() async {
@@ -100,7 +116,10 @@ final class LibraryStore: ObservableObject {
             }
 
             try await reloadFromLocal()
-            await synchronizeWithCloud(showAlertOnFailure: true)
+            await synchronizeWithCloud(
+                showAlertOnFailure: true,
+                failureMessagePrefix: "本地已保存，但同步失败"
+            )
             return true
         } catch {
             alertMessage = Self.userFacingMessage(for: error)
@@ -124,7 +143,10 @@ final class LibraryStore: ObservableObject {
             }.value
 
             try await reloadFromLocal()
-            await synchronizeWithCloud(showAlertOnFailure: true)
+            await synchronizeWithCloud(
+                showAlertOnFailure: true,
+                failureMessagePrefix: "本地已保存，但同步失败"
+            )
             return true
         } catch {
             alertMessage = Self.userFacingMessage(for: error)
@@ -175,6 +197,61 @@ final class LibraryStore: ObservableObject {
         return data
     }
 
+    func connectSharedFolder(at folderURL: URL) async {
+        do {
+            let bookmark = try SharedLibraryFolderBookmark.make(from: folderURL)
+            let candidateTarget = syncTarget.switchingToSharedFolder(bookmark)
+
+            try await prepareLocalStoreIfNeeded()
+
+            let didSync = await synchronizeWithCloud(
+                using: candidateTarget,
+                showAlertOnFailure: true,
+                failureMessagePrefix: "同步失败"
+            )
+
+            guard didSync else {
+                return
+            }
+
+            persistSyncTarget(candidateTarget)
+        } catch {
+            alertMessage = Self.userFacingMessage(for: error)
+        }
+    }
+
+    func usePersonalCloudSync() async {
+        let candidateTarget = syncTarget.switchingToPersonalCloud()
+        persistSyncTarget(candidateTarget)
+        await synchronizeWithCloud(showAlertOnFailure: true, failureMessagePrefix: "同步失败")
+    }
+
+    func useStoredSharedFolderIfAvailable() async {
+        guard let sharedFolderBookmark = syncTarget.sharedFolderBookmark else {
+            alertMessage = "还没有配置共享书库文件夹。"
+            return
+        }
+
+        let candidateTarget = syncTarget.switchingToSharedFolder(sharedFolderBookmark)
+        let didSync = await synchronizeWithCloud(
+            using: candidateTarget,
+            showAlertOnFailure: true,
+            failureMessagePrefix: "同步失败"
+        )
+
+        guard didSync else {
+            return
+        }
+
+        persistSyncTarget(candidateTarget)
+    }
+
+    func clearSharedFolderConfiguration() async {
+        let candidateTarget = syncTarget.removingSharedFolder()
+        persistSyncTarget(candidateTarget)
+        await synchronizeWithCloud(showAlertOnFailure: false)
+    }
+
     static func userFacingMessage(for error: Error) -> String {
         if let localizedDescription = error.localizedDescription.trimmed.nilIfEmpty {
             return localizedDescription
@@ -208,14 +285,30 @@ final class LibraryStore: ObservableObject {
         coverCache = coverCache.filter { snapshot.referencedAssetIDs.contains($0.key) }
     }
 
-    private func synchronizeWithCloud(showAlertOnFailure: Bool) async {
+    private func synchronizeWithCloud(
+        showAlertOnFailure: Bool,
+        failureMessagePrefix: String = "同步失败"
+    ) async {
+        _ = await synchronizeWithCloud(
+            using: syncTarget,
+            showAlertOnFailure: showAlertOnFailure,
+            failureMessagePrefix: failureMessagePrefix
+        )
+    }
+
+    @discardableResult
+    private func synchronizeWithCloud(
+        using syncTarget: LibrarySyncTarget,
+        showAlertOnFailure: Bool,
+        failureMessagePrefix: String
+    ) async -> Bool {
         guard configuration.cloudSyncConfiguration.isEnabled else {
             syncStatus = .unavailable
-            return
+            return false
         }
 
         syncStatus = .syncing
-        let syncEngine = self.syncEngine
+        let syncEngine = makeSyncEngine(using: syncTarget)
 
         do {
             let result = try await Task.detached(priority: .utility) {
@@ -230,15 +323,32 @@ final class LibraryStore: ObservableObject {
                 } catch {
                     alertMessage = Self.userFacingMessage(for: error)
                 }
-            } else {
-                syncStatus = .unavailable
+
+                return true
             }
+
+            syncStatus = .unavailable
+            return false
         } catch {
-            syncStatus = .failed(Self.userFacingMessage(for: error))
+            let message = Self.userFacingMessage(for: error)
+            syncStatus = .failed(message)
 
             if showAlertOnFailure {
-                alertMessage = "本地已保存，但云同步失败：\(Self.userFacingMessage(for: error))"
+                alertMessage = "\(failureMessagePrefix)：\(message)"
             }
+
+            return false
         }
+    }
+
+    private func makeSyncEngine(using syncTarget: LibrarySyncTarget) -> LibrarySyncEngine {
+        var cloudSyncConfiguration = configuration.cloudSyncConfiguration
+        cloudSyncConfiguration.syncTarget = syncTarget
+        return LibrarySyncEngine(localStore: localStore, configuration: cloudSyncConfiguration)
+    }
+
+    private func persistSyncTarget(_ syncTarget: LibrarySyncTarget) {
+        self.syncTarget = syncTarget
+        configuration.syncSettingsStore.save(syncTarget)
     }
 }
