@@ -4,5 +4,7 @@
 <dict>
 	<key>NSCameraUsageDescription</key>
 	<string>扫描书籍 ISBN 需要使用摄像头。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>选择书籍封面需要访问相册。</string>
 </dict>
 </plist>

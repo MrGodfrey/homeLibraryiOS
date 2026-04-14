@@ -10,6 +10,7 @@ import SwiftUI
 
 struct BookEditorView: View {
     let editingBook: Book?
+    let initialCoverData: Data?
     let defaultLocation: BookLocation
     let onSave: (BookDraft, Book?) async -> Bool
 
@@ -24,13 +25,15 @@ struct BookEditorView: View {
 
     init(
         editingBook: Book?,
+        initialCoverData: Data?,
         defaultLocation: BookLocation,
         onSave: @escaping (BookDraft, Book?) async -> Bool
     ) {
         self.editingBook = editingBook
+        self.initialCoverData = initialCoverData
         self.defaultLocation = defaultLocation
         self.onSave = onSave
-        _draft = State(initialValue: BookDraft(book: editingBook, defaultLocation: defaultLocation))
+        _draft = State(initialValue: BookDraft(book: editingBook, coverData: initialCoverData, defaultLocation: defaultLocation))
     }
 
     var body: some View {
@@ -47,6 +50,7 @@ struct BookEditorView: View {
                     Button("取消") {
                         dismiss()
                     }
+                    .accessibilityIdentifier("cancelBookButton")
                 }
 
                 ToolbarItem(placement: .confirmationAction) {
@@ -56,6 +60,7 @@ struct BookEditorView: View {
                         }
                     }
                     .disabled(isSaving || !draft.canSave)
+                    .accessibilityIdentifier("saveBookButton")
                 }
             }
             .sheet(isPresented: $isShowingScanner) {
@@ -82,6 +87,7 @@ struct BookEditorView: View {
         Section("ISBN 自动录入") {
             TextField("输入 ISBN 号", text: $draft.isbn)
                 .isbnTextFieldBehavior()
+                .accessibilityIdentifier("isbnField")
 
             HStack {
                 Button {
@@ -96,6 +102,7 @@ struct BookEditorView: View {
                     }
                 }
                 .disabled(isLookingUp)
+                .accessibilityIdentifier("lookupISBNButton")
 
                 Spacer()
 
@@ -108,6 +115,7 @@ struct BookEditorView: View {
                 } label: {
                     Label("扫码", systemImage: "barcode.viewfinder")
                 }
+                .accessibilityIdentifier("scanISBNButton")
             }
 
             Text("扫描或输入 ISBN 后，自动补全书名、作者、出版社和年份。")
@@ -119,15 +127,20 @@ struct BookEditorView: View {
     private var informationSection: some View {
         Section("图书信息") {
             TextField("书名", text: $draft.title)
+                .accessibilityIdentifier("titleField")
             TextField("作者", text: $draft.author)
+                .accessibilityIdentifier("authorField")
             TextField("出版社", text: $draft.publisher)
+                .accessibilityIdentifier("publisherField")
             TextField("出版年份", text: $draft.year)
+                .accessibilityIdentifier("yearField")
 
             Picker("所在地", selection: $draft.location) {
                 ForEach(BookLocation.allCases) { location in
                     Text(location.rawValue).tag(location)
                 }
             }
+            .accessibilityIdentifier("editorLocationPicker")
         }
     }
 
@@ -140,12 +153,14 @@ struct BookEditorView: View {
             PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
                 Label(draft.coverData == nil ? "选择封面" : "更换封面", systemImage: "photo")
             }
+            .accessibilityIdentifier("pickCoverButton")
 
             if draft.coverData != nil {
                 Button("移除封面", role: .destructive) {
                     selectedPhotoItem = nil
                     draft.coverData = nil
                 }
+                .accessibilityIdentifier("removeCoverButton")
             }
         }
     }

@@ -15,14 +15,14 @@ import AppKit
 typealias PlatformImage = NSImage
 #endif
 
-enum BookLocation: String, CaseIterable, Codable, Identifiable {
+enum BookLocation: String, CaseIterable, Codable, Identifiable, Sendable {
     case chengdu = "成都"
     case chongqing = "重庆"
 
     var id: String { rawValue }
 }
 
-enum LibraryFilterTab: String, CaseIterable, Identifiable {
+enum LibraryFilterTab: String, CaseIterable, Identifiable, Sendable {
     case all = "全部"
     case chengdu = "成都"
     case chongqing = "重庆"
@@ -41,7 +41,7 @@ enum LibraryFilterTab: String, CaseIterable, Identifiable {
     }
 }
 
-struct Book: Identifiable, Hashable, Codable {
+struct Book: Identifiable, Hashable, Codable, Sendable {
     let id: String
     var title: String
     var author: String
@@ -49,7 +49,7 @@ struct Book: Identifiable, Hashable, Codable {
     var year: String
     var isbn: String
     var location: BookLocation
-    var coverData: Data?
+    var coverAssetID: String?
     var createdAt: Date
     var updatedAt: Date
 
@@ -61,7 +61,7 @@ struct Book: Identifiable, Hashable, Codable {
         year: String = "",
         isbn: String = "",
         location: BookLocation,
-        coverData: Data? = nil,
+        coverAssetID: String? = nil,
         createdAt: Date = .now,
         updatedAt: Date = .now
     ) {
@@ -72,7 +72,7 @@ struct Book: Identifiable, Hashable, Codable {
         self.year = year
         self.isbn = isbn
         self.location = location
-        self.coverData = coverData
+        self.coverAssetID = coverAssetID
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -92,7 +92,25 @@ struct Book: Identifiable, Hashable, Codable {
     }
 }
 
-struct BookDraft: Equatable {
+struct LegacyBook: Hashable, Codable, Sendable {
+    let id: String
+    var title: String
+    var author: String
+    var publisher: String
+    var year: String
+    var isbn: String
+    var location: BookLocation
+    var coverData: Data?
+    var createdAt: Date
+    var updatedAt: Date
+}
+
+struct BookDeletionTombstone: Identifiable, Hashable, Codable, Sendable {
+    let id: String
+    let deletedAt: Date
+}
+
+struct BookDraft: Equatable, Sendable {
     var title: String
     var author: String
     var publisher: String
@@ -101,14 +119,32 @@ struct BookDraft: Equatable {
     var location: BookLocation
     var coverData: Data?
 
-    init(book: Book? = nil, defaultLocation: BookLocation = .chengdu) {
+    init(book: Book? = nil, coverData: Data? = nil, defaultLocation: BookLocation = .chengdu) {
         title = book?.title ?? ""
         author = book?.author ?? ""
         publisher = book?.publisher ?? ""
         year = book?.year ?? ""
         isbn = book?.isbn ?? ""
         location = book?.location ?? defaultLocation
-        coverData = book?.coverData
+        self.coverData = coverData
+    }
+
+    init(
+        title: String,
+        author: String,
+        publisher: String,
+        year: String,
+        isbn: String,
+        location: BookLocation,
+        coverData: Data?
+    ) {
+        self.title = title
+        self.author = author
+        self.publisher = publisher
+        self.year = year
+        self.isbn = isbn
+        self.location = location
+        self.coverData = coverData
     }
 
     var normalized: BookDraft {
@@ -162,29 +198,14 @@ enum LibraryFilter {
     }
 }
 
-extension BookDraft {
-    init(
-        title: String,
-        author: String,
-        publisher: String,
-        year: String,
-        isbn: String,
-        location: BookLocation,
-        coverData: Data?
-    ) {
-        self.title = title
-        self.author = author
-        self.publisher = publisher
-        self.year = year
-        self.isbn = isbn
-        self.location = location
-        self.coverData = coverData
-    }
-}
-
 extension String {
     var trimmed: String {
         trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var nilIfEmpty: String? {
+        let value = trimmed
+        return value.isEmpty ? nil : value
     }
 
     var normalizedISBN: String {
@@ -194,16 +215,6 @@ extension String {
 }
 
 #if canImport(UIKit) || canImport(AppKit)
-extension Book {
-    var coverImage: PlatformImage? {
-        guard let coverData else {
-            return nil
-        }
-
-        return PlatformImage(data: coverData)
-    }
-}
-
 extension BookDraft {
     var coverImage: PlatformImage? {
         guard let coverData else {

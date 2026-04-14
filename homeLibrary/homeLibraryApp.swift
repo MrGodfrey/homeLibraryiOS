@@ -9,9 +9,11 @@ import SwiftUI
 
 @main
 struct homeLibraryApp: App {
+    @StateObject private var store = LibraryStore(configuration: .live())
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(store: store)
         }
     }
 }

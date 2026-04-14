@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var store = LibraryStore()
+    @ObservedObject var store: LibraryStore
     @State private var editorTarget: EditorTarget?
     @State private var pendingDeleteBook: Book?
 
@@ -27,6 +27,7 @@ struct ContentView: View {
                             Image(systemName: "arrow.clockwise")
                         }
                         .accessibilityLabel("刷新")
+                        .accessibilityIdentifier("refreshButton")
 
                         Button {
                             editorTarget = .create(defaultLocation: store.activeTab.location ?? .chengdu)
@@ -34,6 +35,7 @@ struct ContentView: View {
                             Image(systemName: "plus")
                         }
                         .accessibilityLabel("添加书籍")
+                        .accessibilityIdentifier("addBookButton")
                     }
                 }
         }
@@ -43,6 +45,7 @@ struct ContentView: View {
         .sheet(item: $editorTarget) { target in
             BookEditorView(
                 editingBook: target.book,
+                initialCoverData: target.initialCoverData,
                 defaultLocation: target.defaultLocation
             ) { draft, book in
                 await store.saveBook(draft: draft, editing: book)
@@ -65,7 +68,7 @@ struct ContentView: View {
                 pendingDeleteBook = nil
             }
         } message: {
-            Text("删除后不会自动恢复。")
+            Text("删除后会同步到云端。")
         }
         .alert("提示", isPresented: alertBinding) {
             Button("知道了", role: .cancel) {
@@ -84,12 +87,16 @@ struct ContentView: View {
                 }
             }
             .pickerStyle(.segmented)
+            .accessibilityIdentifier("locationPicker")
 
-            HStack {
+            HStack(alignment: .center, spacing: 12) {
                 Text("共 \(store.visibleBooks.count) 本可见藏书")
                     .font(.headline)
+                    .accessibilityIdentifier("visibleCountLabel")
 
                 Spacer()
+
+                SyncStatusBadge(status: store.syncStatus)
 
                 if store.isLoading {
                     ProgressView()
@@ -105,17 +112,26 @@ struct ContentView: View {
                     systemImage: "books.vertical",
                     description: Text("试试切换地点、搜索关键词，或者直接添加一本新书。")
                 )
+                .accessibilityIdentifier("emptyState")
 
                 Spacer()
             } else {
                 ScrollView {
                     LazyVStack(spacing: 12) {
                         ForEach(store.visibleBooks) { book in
-                            BookRowCard(book: book) {
-                                editorTarget = .edit(book)
-                            } onDelete: {
-                                pendingDeleteBook = book
-                            }
+                            BookRowCard(
+                                book: book,
+                                coverLoader: store.coverData(for:),
+                                onEdit: {
+                                    editorTarget = .edit(
+                                        book,
+                                        initialCoverData: store.coverDataSynchronously(for: book.coverAssetID)
+                                    )
+                                },
+                                onDelete: {
+                                    pendingDeleteBook = book
+                                }
+                            )
                         }
                     }
                     .padding(.bottom, 12)
@@ -151,14 +167,45 @@ struct ContentView: View {
     }
 }
 
+private struct SyncStatusBadge: View {
+    let status: LibrarySyncStatus
+
+    var body: some View {
+        Label(status.label, systemImage: status.systemImageName)
+            .font(.caption.weight(.semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .foregroundStyle(tintColor)
+            .background(tintColor.opacity(0.12), in: Capsule())
+            .accessibilityIdentifier("syncStatusBadge")
+    }
+
+    private var tintColor: Color {
+        switch status {
+        case .idle:
+            return .secondary
+        case .unavailable:
+            return .secondary
+        case .syncing:
+            return .blue
+        case .upToDate:
+            return .green
+        case .failed:
+            return .red
+        }
+    }
+}
+
 private struct BookRowCard: View {
     let book: Book
+    let coverLoader: (String?) async -> Data?
     let onEdit: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
-            BookThumbnail(data: book.coverData, title: book.title)
+            BookThumbnail(assetID: book.coverAssetID, title: book.title, coverLoader: coverLoader)
                 .frame(width: 68, height: 92)
 
             VStack(alignment: .leading, spacing: 8) {
@@ -195,6 +242,7 @@ private struct BookRowCard: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("编辑 \(book.title)")
+                .accessibilityIdentifier("editBook-\(book.id)")
 
                 Button(role: .destructive, action: onDelete) {
                     Image(systemName: "trash")
@@ -203,12 +251,14 @@ private struct BookRowCard: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("删除 \(book.title)")
+                .accessibilityIdentifier("deleteBook-\(book.id)")
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .contentShape(Rectangle())
+        .accessibilityIdentifier("bookRow-\(book.id)")
         .onTapGesture(perform: onEdit)
     }
 
@@ -223,8 +273,11 @@ private struct BookRowCard: View {
 }
 
 private struct BookThumbnail: View {
-    let data: Data?
+    let assetID: String?
     let title: String
+    let coverLoader: (String?) async -> Data?
+
+    @State private var coverData: Data?
 
     var body: some View {
         ZStack {
@@ -249,14 +302,17 @@ private struct BookThumbnail: View {
                 }
             }
         }
+        .task(id: assetID) {
+            coverData = await coverLoader(assetID)
+        }
     }
 
     private var platformImage: PlatformImage? {
-        guard let data else {
+        guard let coverData else {
             return nil
         }
 
-        return PlatformImage(data: data)
+        return PlatformImage(data: coverData)
     }
 
     @ViewBuilder
@@ -275,13 +331,13 @@ private struct BookThumbnail: View {
 
 private enum EditorTarget: Identifiable {
     case create(defaultLocation: BookLocation)
-    case edit(Book)
+    case edit(Book, initialCoverData: Data?)
 
     var id: String {
         switch self {
         case .create(let defaultLocation):
             return "create-\(defaultLocation.rawValue)"
-        case .edit(let book):
+        case .edit(let book, _):
             return "edit-\(book.id)"
         }
     }
@@ -290,7 +346,7 @@ private enum EditorTarget: Identifiable {
         switch self {
         case .create:
             return nil
-        case .edit(let book):
+        case .edit(let book, _):
             return book
         }
     }
@@ -299,8 +355,17 @@ private enum EditorTarget: Identifiable {
         switch self {
         case .create(let defaultLocation):
             return defaultLocation
-        case .edit(let book):
+        case .edit(let book, _):
             return book.location
+        }
+    }
+
+    var initialCoverData: Data? {
+        switch self {
+        case .create:
+            return nil
+        case .edit(_, let initialCoverData):
+            return initialCoverData
         }
     }
 }

@@ -19,6 +19,13 @@ final class homeLibraryUITestsLaunchTests: XCTestCase {
 
     @MainActor
     func testLaunch() throws {
-        throw XCTSkip("Template launch screenshot test is disabled until the UI runner can resolve a launchable homeLibrary.app.")
+        let app = XCUIApplication()
+        app.launchEnvironment["HOME_LIBRARY_STORAGE_NAMESPACE"] = "launch-tests-\(UUID().uuidString)"
+        app.launchEnvironment["HOME_LIBRARY_DISABLE_BUNDLED_SEED"] = "1"
+        app.launchEnvironment["HOME_LIBRARY_DISABLE_CLOUD_SYNC"] = "1"
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["家藏万卷"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["addBookButton"].exists)
     }
 }

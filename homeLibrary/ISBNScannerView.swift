@@ -9,6 +9,7 @@ import SwiftUI
 
 #if canImport(UIKit) && canImport(VisionKit)
 import UIKit
+import Vision
 import VisionKit
 
 enum ISBNScannerAvailability {
