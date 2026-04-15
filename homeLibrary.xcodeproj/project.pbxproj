@@ -188,6 +188,11 @@
 				TargetAttributes = {
 					88809B3B2F8DE22D0057725A = {
 						CreatedOnToolsVersion = 26.4;
+						SystemCapabilities = {
+							com.apple.iCloud = {
+								enabled = 1;
+							};
+						};
 					};
 					88809B4C2F8DE22F0057725A = {
 						CreatedOnToolsVersion = 26.4;
@@ -287,6 +292,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = homeLibrary/homeLibrary.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 8VG8636JLY;

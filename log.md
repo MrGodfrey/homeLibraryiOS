@@ -39,3 +39,33 @@
 - 生成的 `homeLibrary/SeedBooks.json` 大小约 `19.65 MB`
 - `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' build` 通过
 - 构建产物确认执行 `CpResource ... SeedBooks.json ... homeLibrary.app`
+
+## 2026-04-15
+
+- 去掉本地模式主路径：`LibraryAppConfiguration.live()` 不再根据 `Debug` 或环境变量回退到本地模式，应用运行默认始终按 CloudKit 仓库逻辑启动。
+- 删除本地仓库语义：移除 `localOnly` 角色以及“本地模式 / 本地调试仓库”相关文案、状态和分支判断，仓库管理界面只保留 CloudKit 路径。
+- 收敛 `LibraryStore`：加载、保存、删除统一走远端仓库同步与本地缓存刷新，不再保留本地模式专用 seed / cache 写入链路。
+- 新增测试远端驱动：加入 `InMemoryLibraryRemoteService`，供单测和 UI 测试使用，避免测试宿主在启动期直接初始化 CloudKit。
+- 调整测试配置：`XCTest` 宿主默认使用内存远端，UI 测试改为显式设置 `HOME_LIBRARY_REMOTE_DRIVER=memory`，不再通过关闭 Cloud sync 进入旧本地模式。
+- 收紧 UI 交互与测试：移除书籍行整行点击进入编辑的手势，保留显式编辑按钮；UI 测试拆分为“新增并编辑”和“搜索过滤”两条稳定路径。
+
+### 验证记录
+
+- `Build iOS Apps / build_sim` 通过
+- `Build iOS Apps / build_run_sim` 通过，应用可在 `iPhone 17` 模拟器启动
+- `Build iOS Apps / test_sim -only-testing:homeLibraryTests` 通过，`10` 个单元测试全部通过
+- `Build iOS Apps / test_sim -only-testing:homeLibraryUITests` 通过，`3` 个 UI 测试全部通过
+- `Build iOS Apps / test_sim` 通过，整套 `13` 个测试全部通过
+
+## 2026-04-15（CloudKit entitlement 修正）
+
+- 修复真机 CloudKit entitlement 缺失：`homeLibrary` target 的 `Debug` 配置现在也绑定 `homeLibrary/homeLibrary.entitlements`。
+- 在工程的 target attributes 中显式开启 iCloud capability，避免新设备上的调试包缺少 `com.apple.developer.icloud-services`。
+- 重写 `README.md`：删除“`Debug` 走本地模式、`Release` 才启用 CloudKit”的过期说明，改为当前真实运行、测试驱动和签名要求。
+
+### 验证记录
+
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -configuration Debug -showBuildSettings` 确认 `Debug` 带有 `CODE_SIGN_ENTITLEMENTS = homeLibrary/homeLibrary.entitlements`
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -configuration Release -showBuildSettings` 确认 `Release` 带有同一份 entitlement
+- `Build iOS Apps / build_sim` 通过
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -configuration Debug -destination 'id=00008140-00186D4A2EEB001C' build -quiet` 通过
