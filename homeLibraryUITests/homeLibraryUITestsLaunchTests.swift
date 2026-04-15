@@ -21,7 +21,6 @@ final class homeLibraryUITestsLaunchTests: XCTestCase {
     func testLaunch() throws {
         let app = XCUIApplication()
         app.launchEnvironment["HOME_LIBRARY_STORAGE_NAMESPACE"] = "launch-tests-\(UUID().uuidString)"
-        app.launchEnvironment["HOME_LIBRARY_DISABLE_BUNDLED_SEED"] = "1"
         app.launchEnvironment["HOME_LIBRARY_REMOTE_DRIVER"] = "memory"
         app.launch()
 

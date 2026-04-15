@@ -14,14 +14,13 @@ final class homeLibraryUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["HOME_LIBRARY_STORAGE_NAMESPACE"] = "ui-tests-\(UUID().uuidString)"
-        app.launchEnvironment["HOME_LIBRARY_DISABLE_BUNDLED_SEED"] = "1"
         app.launchEnvironment["HOME_LIBRARY_REMOTE_DRIVER"] = "memory"
         app.launch()
     }
 
     @MainActor
     func testAddAndEditBookOnIOS() throws {
-        XCTAssertTrue(app.staticTexts["当前没有匹配的书籍"].waitForExistence(timeout: 5))
+        createOwnedRepositoryIfNeeded()
 
         addBook(title: "测试驱动开发", author: "Kent Beck", publisher: "Addison-Wesley", year: "2002")
 
@@ -40,7 +39,7 @@ final class homeLibraryUITests: XCTestCase {
 
     @MainActor
     func testSearchFiltersBooksOnIOS() throws {
-        XCTAssertTrue(app.staticTexts["当前没有匹配的书籍"].waitForExistence(timeout: 5))
+        createOwnedRepositoryIfNeeded()
 
         addBook(title: "测试驱动开发", author: "Kent Beck", publisher: "Addison-Wesley", year: "2002")
 
@@ -75,6 +74,14 @@ final class homeLibraryUITests: XCTestCase {
         yearField.typeText(year)
 
         app.buttons["saveBookButton"].tap()
+    }
+
+    private func createOwnedRepositoryIfNeeded() {
+        if app.buttons["创建我的仓库"].waitForExistence(timeout: 5) {
+            app.buttons["创建我的仓库"].tap()
+        }
+
+        XCTAssertTrue(app.buttons["addBookButton"].waitForExistence(timeout: 5))
     }
 
     private func replaceText(in element: XCUIElement, with value: String) {

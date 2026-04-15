@@ -6,12 +6,14 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var store: LibraryStore
     @State private var editorTarget: EditorTarget?
     @State private var pendingDeleteBook: Book?
     @State private var isShowingRepositorySheet = false
+    @State private var isShowingLegacyImportPicker = false
 
     var body: some View {
         NavigationStack {
@@ -43,6 +45,7 @@ struct ContentView: View {
                         } label: {
                             Image(systemName: "plus")
                         }
+                        .disabled(!store.hasRepository)
                         .accessibilityLabel("添加书籍")
                         .accessibilityIdentifier("addBookButton")
                     }
@@ -53,6 +56,13 @@ struct ContentView: View {
         }
         .sheet(isPresented: $isShowingRepositorySheet) {
             RepositoryManagementView(store: store)
+        }
+        .fileImporter(
+            isPresented: $isShowingLegacyImportPicker,
+            allowedContentTypes: [.json],
+            allowsMultipleSelection: false
+        ) { result in
+            handleLegacyImportSelection(result)
         }
         .sheet(item: $editorTarget) { target in
             BookEditorView(
@@ -125,12 +135,49 @@ struct ContentView: View {
             if store.visibleBooks.isEmpty && !store.isLoading {
                 Spacer()
 
-                ContentUnavailableView(
-                    "当前没有匹配的书籍",
-                    systemImage: "books.vertical",
-                    description: Text("试试切换地点、搜索关键词，或者直接添加一本新书。")
-                )
-                .accessibilityIdentifier("emptyState")
+                if !store.hasRepository {
+                    ContentUnavailableView {
+                        Label("还没有仓库", systemImage: "books.vertical")
+                    } description: {
+                        Text("当前 iCloud 账号下没有可用仓库。你可以创建一个新仓库，或者从旧 JSON 迁移。")
+                    } actions: {
+                        Button(store.isCreatingRepository ? "创建中..." : "创建我的仓库") {
+                            Task {
+                                _ = await store.createOwnedRepository()
+                            }
+                        }
+                        .disabled(store.isCreatingRepository || store.isImportingLegacyData)
+
+                        Button(store.isImportingLegacyData ? "导入中..." : "迁移旧数据") {
+                            isShowingLegacyImportPicker = true
+                        }
+                        .disabled(store.isCreatingRepository || store.isImportingLegacyData)
+                    }
+                    .accessibilityIdentifier("emptyState")
+                } else if hasActiveFilters {
+                    ContentUnavailableView(
+                        "当前没有匹配的书籍",
+                        systemImage: "books.vertical",
+                        description: Text("试试切换地点、搜索关键词，或者清空筛选条件。")
+                    )
+                    .accessibilityIdentifier("emptyState")
+                } else {
+                    ContentUnavailableView {
+                        Label("仓库还是空的", systemImage: "books.vertical")
+                    } description: {
+                        Text("你可以直接添加一本新书，或者从旧 JSON 迁移。")
+                    } actions: {
+                        Button("添加书籍") {
+                            editorTarget = .create(defaultLocation: store.activeTab.location ?? .chengdu)
+                        }
+
+                        Button(store.isImportingLegacyData ? "导入中..." : "迁移旧数据") {
+                            isShowingLegacyImportPicker = true
+                        }
+                        .disabled(store.isImportingLegacyData)
+                    }
+                    .accessibilityIdentifier("emptyState")
+                }
 
                 Spacer()
             } else {
@@ -182,6 +229,25 @@ struct ContentView: View {
                 }
             }
         )
+    }
+
+    private var hasActiveFilters: Bool {
+        !store.searchText.trimmed.isEmpty || store.activeTab != .all
+    }
+
+    private func handleLegacyImportSelection(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else {
+                return
+            }
+
+            Task {
+                _ = await store.importLegacyJSON(from: url)
+            }
+        case .failure(let error):
+            store.alertMessage = LibraryStore.userFacingMessage(for: error)
+        }
     }
 }
 

@@ -158,14 +158,14 @@ final class homeLibraryTests: XCTestCase {
     }
 
     @MainActor
-    func testStoreBootstrapsOwnedCloudRepositoryWhenNoRepositoryExists() async throws {
+    func testStoreLeavesNewUserWithoutRepositoryWhenCloudIsEmpty() async throws {
         let namespace = "store-transition-\(UUID().uuidString)"
         let sessionStore = RepositorySessionStore(namespace: namespace)
         let ownerKey = "homeLibrary.repository.\(namespace).ownerProfileID"
-        let migrationKey = "homeLibrary.repository.\(namespace).migration.cloud-owned"
+        let sessionKey = "homeLibrary.repository.\(namespace).session"
         addTeardownBlock {
             UserDefaults.standard.removeObject(forKey: ownerKey)
-            UserDefaults.standard.removeObject(forKey: migrationKey)
+            UserDefaults.standard.removeObject(forKey: sessionKey)
         }
 
         let tempRoot = try makeTemporaryDirectory()
@@ -181,11 +181,152 @@ final class homeLibraryTests: XCTestCase {
         let store = LibraryStore(configuration: configuration)
         await store.loadBooks(force: true)
 
+        XCTAssertNil(store.currentRepository)
+        XCTAssertNil(store.ownedRepository)
+        XCTAssertEqual(store.books.count, 0)
+        let fetchOwnedRepositoryCallCount = await remoteService.fetchOwnedRepositoryCallCountValue()
+        XCTAssertEqual(fetchOwnedRepositoryCallCount, 1)
+        let createOwnedRepositoryCallCount = await remoteService.createOwnedRepositoryCallCountValue()
+        XCTAssertEqual(createOwnedRepositoryCallCount, 0)
+    }
+
+    @MainActor
+    func testStoreAutoLoadsOwnedRepositoryWhenCloudAlreadyHasOne() async throws {
+        let namespace = "store-discovery-\(UUID().uuidString)"
+        let sessionStore = RepositorySessionStore(namespace: namespace)
+        let ownerKey = "homeLibrary.repository.\(namespace).ownerProfileID"
+        let sessionKey = "homeLibrary.repository.\(namespace).session"
+        addTeardownBlock {
+            UserDefaults.standard.removeObject(forKey: ownerKey)
+            UserDefaults.standard.removeObject(forKey: sessionKey)
+        }
+
+        let tempRoot = try makeTemporaryDirectory()
+        let discoveredRepository = RepositoryDescriptor(
+            id: "cloud-owned",
+            name: "我的家庭书库",
+            ownerProfileID: "remote-owner-profile",
+            accessAccount: "HL1001"
+        )
+        let remoteService = MockLibraryRemoteService(
+            fetchedOwnedRepository: discoveredRepository
+        )
+        let configuration = LibraryAppConfiguration(
+            cacheStore: LibraryCacheStore(rootURL: tempRoot.appendingPathComponent("cloudkit-cache", isDirectory: true)),
+            legacyImporter: LegacyLibraryImporter(storageRootURL: tempRoot),
+            sessionStore: sessionStore,
+            remoteService: remoteService,
+            preferredOwnedRepositoryName: "我的家庭书库"
+        )
+
+        let store = LibraryStore(configuration: configuration)
+        await store.loadBooks(force: true)
+
         XCTAssertEqual(store.currentRepository?.id, "cloud-owned")
         XCTAssertEqual(store.currentRepository?.role, .owner)
         XCTAssertEqual(store.ownedRepository?.id, "cloud-owned")
-        let bootstrapCallCount = await remoteService.bootstrapCallCountValue()
-        XCTAssertEqual(bootstrapCallCount, 1)
+        XCTAssertEqual(store.repositoryTitle, "我的家庭书库")
+        XCTAssertEqual(sessionStore.load().ownerProfileID, "remote-owner-profile")
+        let fetchOwnedRepositoryCallCount = await remoteService.fetchOwnedRepositoryCallCountValue()
+        XCTAssertEqual(fetchOwnedRepositoryCallCount, 1)
+        let createOwnedRepositoryCallCount = await remoteService.createOwnedRepositoryCallCountValue()
+        XCTAssertEqual(createOwnedRepositoryCallCount, 0)
+    }
+
+    @MainActor
+    func testCreateOwnedRepositoryRequiresExplicitAction() async throws {
+        let namespace = "store-create-\(UUID().uuidString)"
+        let sessionStore = RepositorySessionStore(namespace: namespace)
+        let ownerKey = "homeLibrary.repository.\(namespace).ownerProfileID"
+        let sessionKey = "homeLibrary.repository.\(namespace).session"
+        addTeardownBlock {
+            UserDefaults.standard.removeObject(forKey: ownerKey)
+            UserDefaults.standard.removeObject(forKey: sessionKey)
+        }
+
+        let tempRoot = try makeTemporaryDirectory()
+        let createdRepository = RepositoryBootstrapResult(
+            descriptor: RepositoryDescriptor(
+                id: "created-owned",
+                name: "我的家庭书库",
+                ownerProfileID: "owner-profile",
+                accessAccount: "HL1001"
+            ),
+            credentials: RepositoryCredentials(account: "HL1001", password: "PASS-1001")
+        )
+        let remoteService = MockLibraryRemoteService(
+            fetchedOwnedRepository: nil,
+            createdOwnedRepository: createdRepository
+        )
+        let configuration = LibraryAppConfiguration(
+            cacheStore: LibraryCacheStore(rootURL: tempRoot.appendingPathComponent("cloudkit-cache", isDirectory: true)),
+            legacyImporter: LegacyLibraryImporter(storageRootURL: tempRoot),
+            sessionStore: sessionStore,
+            remoteService: remoteService,
+            preferredOwnedRepositoryName: "我的家庭书库"
+        )
+
+        let store = LibraryStore(configuration: configuration)
+        let didCreate = await store.createOwnedRepository()
+
+        XCTAssertTrue(didCreate)
+        XCTAssertEqual(store.currentRepository?.id, "created-owned")
+        XCTAssertEqual(store.ownedRepository?.credentials?.password, "PASS-1001")
+        let createOwnedRepositoryCallCount = await remoteService.createOwnedRepositoryCallCountValue()
+        XCTAssertEqual(createOwnedRepositoryCallCount, 1)
+    }
+
+    @MainActor
+    func testImportLegacyJSONCreatesOwnedRepositoryAndLoadsBooks() async throws {
+        let namespace = "store-import-\(UUID().uuidString)"
+        let sessionStore = RepositorySessionStore(namespace: namespace)
+        let ownerKey = "homeLibrary.repository.\(namespace).ownerProfileID"
+        let sessionKey = "homeLibrary.repository.\(namespace).session"
+        addTeardownBlock {
+            UserDefaults.standard.removeObject(forKey: ownerKey)
+            UserDefaults.standard.removeObject(forKey: sessionKey)
+        }
+
+        let tempRoot = try makeTemporaryDirectory()
+        let importURL = tempRoot.appendingPathComponent("LegacyImport.json")
+        let payload = """
+        {
+          "schemaVersion" : 1,
+          "source" : "unit-test",
+          "books" : [
+            {
+              "id" : "legacy-book-1",
+              "title" : "旧书导入",
+              "author" : "作者 A",
+              "publisher" : "出版社 A",
+              "year" : "2024",
+              "location" : "成都",
+              "customFields" : {
+                "备注" : "测试"
+              },
+              "createdAt" : "\(LibraryJSONCodec.encodeDate(Date(timeIntervalSince1970: 1)))",
+              "updatedAt" : "\(LibraryJSONCodec.encodeDate(Date(timeIntervalSince1970: 2)))"
+            }
+          ]
+        }
+        """
+        try Data(payload.utf8).write(to: importURL, options: [.atomic])
+
+        let configuration = LibraryAppConfiguration(
+            cacheStore: LibraryCacheStore(rootURL: tempRoot.appendingPathComponent("cloudkit-cache", isDirectory: true)),
+            legacyImporter: LegacyLibraryImporter(storageRootURL: tempRoot),
+            sessionStore: sessionStore,
+            remoteService: InMemoryLibraryRemoteService(),
+            preferredOwnedRepositoryName: "我的家庭书库"
+        )
+
+        let store = LibraryStore(configuration: configuration)
+        let didImport = await store.importLegacyJSON(from: importURL)
+
+        XCTAssertTrue(didImport)
+        XCTAssertEqual(store.currentRepository?.role, .owner)
+        XCTAssertEqual(store.books.map(\.id), ["legacy-book-1"])
+        XCTAssertEqual(store.books.first?.title, "旧书导入")
     }
 
     private func makeTemporaryDirectory() throws -> URL {
@@ -199,13 +340,34 @@ final class homeLibraryTests: XCTestCase {
 }
 
 private actor MockLibraryRemoteService: LibraryRemoteSyncing {
-    private var bootstrapCallCount = 0
+    private let fetchedOwnedRepository: RepositoryDescriptor?
+    private let createdOwnedRepository: RepositoryBootstrapResult?
+    private var fetchOwnedRepositoryCallCount = 0
+    private var createOwnedRepositoryCallCount = 0
 
-    func bootstrapOwnedRepository(ownerProfileID: String, preferredName: String) async throws -> RepositoryBootstrapResult {
-        bootstrapCallCount += 1
+    init(
+        fetchedOwnedRepository: RepositoryDescriptor? = nil,
+        createdOwnedRepository: RepositoryBootstrapResult? = nil
+    ) {
+        self.fetchedOwnedRepository = fetchedOwnedRepository
+        self.createdOwnedRepository = createdOwnedRepository
+    }
+
+    func fetchOwnedRepository(ownerProfileID: String) async throws -> RepositoryDescriptor? {
+        _ = ownerProfileID
+        fetchOwnedRepositoryCallCount += 1
+        return fetchedOwnedRepository
+    }
+
+    func createOwnedRepository(ownerProfileID: String, preferredName: String) async throws -> RepositoryBootstrapResult {
+        createOwnedRepositoryCallCount += 1
+
+        if let createdOwnedRepository {
+            return createdOwnedRepository
+        }
 
         let descriptor = RepositoryDescriptor(
-            id: "cloud-owned",
+            id: "created-owned",
             name: preferredName,
             ownerProfileID: ownerProfileID,
             accessAccount: "HL1001"
@@ -215,7 +377,15 @@ private actor MockLibraryRemoteService: LibraryRemoteSyncing {
     }
 
     func fetchRepository(id: String) async throws -> RepositoryDescriptor {
-        RepositoryDescriptor(
+        if let fetchedOwnedRepository, fetchedOwnedRepository.id == id {
+            return fetchedOwnedRepository
+        }
+
+        if let createdOwnedRepository, createdOwnedRepository.descriptor.id == id {
+            return createdOwnedRepository.descriptor
+        }
+
+        return RepositoryDescriptor(
             id: id,
             name: "我的家庭书库",
             ownerProfileID: "owner-profile",
@@ -243,7 +413,11 @@ private actor MockLibraryRemoteService: LibraryRemoteSyncing {
         throw XCTSkip("unused in this test")
     }
 
-    func bootstrapCallCountValue() -> Int {
-        bootstrapCallCount
+    func fetchOwnedRepositoryCallCountValue() -> Int {
+        fetchOwnedRepositoryCallCount
+    }
+
+    func createOwnedRepositoryCallCountValue() -> Int {
+        createOwnedRepositoryCallCount
     }
 }

@@ -34,6 +34,9 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				LibraryImport.json,
+				SeedBooks.json,
+				books.json,
 			);
 			target = 88809B3B2F8DE22D0057725A /* homeLibrary */;
 		};

@@ -376,11 +376,9 @@ nonisolated struct LibraryCacheStore: Sendable {
 
 nonisolated struct LegacyLibraryImporter: Sendable {
     let storageRootURL: URL
-    let bundleResourceURL: URL?
 
-    nonisolated init(storageRootURL: URL, bundleResourceURL: URL? = nil) {
+    nonisolated init(storageRootURL: URL) {
         self.storageRootURL = storageRootURL
-        self.bundleResourceURL = bundleResourceURL
     }
 
     nonisolated func loadBooks() throws -> [LegacyImportedBook] {
@@ -396,11 +394,11 @@ nonisolated struct LegacyLibraryImporter: Sendable {
             return try loadSeedBooksJSON(from: seedImportURL)
         }
 
-        if let seedImportURL = firstExistingImportURL(in: bundleImportDirectories) {
-            return try loadSeedBooksJSON(from: seedImportURL)
-        }
-
         return []
+    }
+
+    nonisolated func loadBooks(from importFileURL: URL) throws -> [LegacyImportedBook] {
+        try loadSeedBooksJSON(from: importFileURL)
     }
 
     nonisolated func cleanupAfterMigration() throws {
@@ -422,14 +420,6 @@ nonisolated struct LegacyLibraryImporter: Sendable {
 
     nonisolated private var legacyBooksJSONURL: URL {
         storageRootURL.appendingPathComponent("books.json")
-    }
-
-    nonisolated private var bundleImportDirectories: [URL] {
-        guard let bundleResourceURL else {
-            return []
-        }
-
-        return [bundleResourceURL]
     }
 
     nonisolated private func hasStructuredRecords() throws -> Bool {

@@ -15,6 +15,8 @@ final class LibraryStore: ObservableObject {
     @Published var activeTab: LibraryFilterTab = .all
     @Published private(set) var isLoading = false
     @Published private(set) var isSaving = false
+    @Published private(set) var isCreatingRepository = false
+    @Published private(set) var isImportingLegacyData = false
     @Published private(set) var syncStatus: LibrarySyncStatus
     @Published private(set) var currentRepository: LibraryRepositoryReference?
     @Published private(set) var ownedRepository: LibraryRepositoryReference?
@@ -44,12 +46,32 @@ final class LibraryStore: ObservableObject {
         LibraryFilter.filteredBooks(from: books, query: searchText, tab: activeTab)
     }
 
+    var hasRepository: Bool {
+        currentRepository != nil
+    }
+
+    var hasOwnedRepository: Bool {
+        ownedRepository != nil
+    }
+
     var repositoryTitle: String {
-        currentRepository?.name ?? "正在准备仓库"
+        if let currentRepository {
+            return currentRepository.name
+        }
+
+        return isLoading ? "正在检查仓库" : "还没有仓库"
     }
 
     var repositorySubtitle: String {
-        currentRepository?.subtitle ?? "首次启动时会自动创建你的 CloudKit 仓库。"
+        if let currentRepository {
+            return currentRepository.subtitle
+        }
+
+        if isLoading {
+            return "正在检查当前 iCloud 账号下是否已有可用仓库。"
+        }
+
+        return "当前设备没有可用仓库。你可以创建自己的仓库，或者从旧 JSON 迁移。"
     }
 
     var repositoryRoleTitle: String {
@@ -57,11 +79,7 @@ final class LibraryStore: ObservableObject {
     }
 
     var repositoryCredentials: RepositoryCredentials? {
-        guard currentRepository?.isOwner == true else {
-            return nil
-        }
-
-        return currentRepository?.credentials
+        ownedRepository?.credentials
     }
 
     var canManageCloudRepository: Bool {
@@ -93,13 +111,15 @@ final class LibraryStore: ObservableObject {
         defer { isLoading = false }
 
         do {
-            let repository = try await ensureCurrentRepositoryIfNeeded()
-
-            if repository.isOwner {
-                try await seedOwnedRepositoryIfNeeded(into: repository)
+            guard let repository = try await resolveCurrentRepositoryIfNeeded() else {
+                books = []
+                coverCache = [:]
+                syncStatus = .idle
+                hasLoaded = true
+                return
             }
 
-            try await refreshFromCloud()
+            try await refreshFromCloud(repositoryID: repository.id)
             hasLoaded = true
         } catch {
             let message = Self.userFacingMessage(for: error)
@@ -121,7 +141,11 @@ final class LibraryStore: ObservableObject {
         defer { isSaving = false }
 
         do {
-            let repository = try await ensureCurrentRepositoryIfNeeded()
+            guard let repository = try await resolveCurrentRepositoryIfNeeded() else {
+                alertMessage = "请先创建仓库，或先加入一个仓库。"
+                return false
+            }
+
             let now = Date()
             let preservedCoverAssetID = normalizedDraft.keepsExistingCoverReference ? existingBook?.coverAssetID : nil
             let book = Book(
@@ -164,7 +188,11 @@ final class LibraryStore: ObservableObject {
         defer { isSaving = false }
 
         do {
-            let repository = try await ensureCurrentRepositoryIfNeeded()
+            guard let repository = try await resolveCurrentRepositoryIfNeeded() else {
+                alertMessage = "当前还没有可写入的仓库。"
+                return false
+            }
+
             let deletedAt = Date()
 
             syncStatus = .syncing
@@ -265,6 +293,92 @@ final class LibraryStore: ObservableObject {
     }
 
     @discardableResult
+    func createOwnedRepository() async -> Bool {
+        guard !isCreatingRepository else {
+            return false
+        }
+
+        isCreatingRepository = true
+        defer { isCreatingRepository = false }
+
+        do {
+            if let ownedRepository = sessionState.ownedRepository {
+                sessionState.currentRepository = ownedRepository
+                persistSessionState()
+                await loadBooks(force: true)
+                return true
+            }
+
+            if let descriptor = try await remoteService.fetchOwnedRepository(ownerProfileID: sessionState.ownerProfileID) {
+                let ownedRepository = makeOwnedRepositoryReference(from: descriptor)
+                sessionState.ownerProfileID = descriptor.ownerProfileID
+                sessionState.ownedRepository = ownedRepository
+                sessionState.currentRepository = ownedRepository
+                persistSessionState()
+                await loadBooks(force: true)
+                return true
+            }
+
+            let bootstrap = try await remoteService.createOwnedRepository(
+                ownerProfileID: sessionState.ownerProfileID,
+                preferredName: configuration.preferredOwnedRepositoryName
+            )
+            let ownedRepository = makeOwnedRepositoryReference(
+                from: bootstrap.descriptor,
+                savedPassword: bootstrap.credentials.password
+            )
+
+            sessionState.ownerProfileID = bootstrap.descriptor.ownerProfileID
+            sessionState.ownedRepository = ownedRepository
+            sessionState.currentRepository = ownedRepository
+            persistSessionState()
+            await loadBooks(force: true)
+            return true
+        } catch {
+            let message = Self.userFacingMessage(for: error)
+            alertMessage = message
+            syncStatus = .failed(message)
+            return false
+        }
+    }
+
+    @discardableResult
+    func importLegacyJSON(from fileURL: URL) async -> Bool {
+        guard !isImportingLegacyData else {
+            return false
+        }
+
+        isImportingLegacyData = true
+        defer { isImportingLegacyData = false }
+
+        do {
+            let repository = try await ensureOwnedRepositoryForMigration()
+            let importer = configuration.legacyImporter
+            let importedBooks = try await loadImportedBooks(using: importer, from: fileURL)
+
+            guard !importedBooks.isEmpty else {
+                alertMessage = "选中的 JSON 没有可导入的书籍。"
+                return false
+            }
+
+            syncStatus = .syncing
+
+            for imported in importedBooks.sorted(by: { $0.book.updatedAt < $1.book.updatedAt }) {
+                _ = try await remoteService.upsertBook(imported.book, coverData: imported.coverData, in: repository.id)
+            }
+
+            try await refreshFromCloud(repositoryID: repository.id)
+            alertMessage = "已导入 \(importedBooks.count) 本旧书，并切换到我的仓库。"
+            return true
+        } catch {
+            let message = Self.userFacingMessage(for: error)
+            alertMessage = message
+            syncStatus = .failed(message)
+            return false
+        }
+    }
+
+    @discardableResult
     func regenerateOwnedRepositoryCredentials() async -> Bool {
         guard let ownedRepository = sessionState.ownedRepository else {
             alertMessage = "当前没有可管理的 CloudKit 仓库。"
@@ -302,7 +416,7 @@ final class LibraryStore: ObservableObject {
         }
     }
 
-    static func userFacingMessage(for error: Error) -> String {
+    nonisolated static func userFacingMessage(for error: Error) -> String {
         if let localizedDescription = error.localizedDescription.trimmed.nilIfEmpty {
             return localizedDescription
         }
@@ -310,21 +424,17 @@ final class LibraryStore: ObservableObject {
         return "发生了未预期的错误。"
     }
 
-    private func refreshFromCloud() async throws {
-        guard let repository = currentRepository else {
-            return
-        }
-
+    private func refreshFromCloud(repositoryID: String) async throws {
         syncStatus = .syncing
-        let snapshots = try await remoteService.fetchBooks(in: repository.id)
+        let snapshots = try await remoteService.fetchBooks(in: repositoryID)
         let synchronizedAt = Date()
-        try await replaceCache(with: snapshots, repositoryID: repository.id, synchronizedAt: synchronizedAt)
-        try await reloadFromCache(repositoryID: repository.id)
-        try await reconcileRepositoryMetadata(for: repository.id)
+        try await replaceCache(with: snapshots, repositoryID: repositoryID, synchronizedAt: synchronizedAt)
+        try await reloadFromCache(repositoryID: repositoryID)
+        try await reconcileRepositoryMetadata(for: repositoryID)
         syncStatus = .upToDate(synchronizedAt)
     }
 
-    private func ensureCurrentRepositoryIfNeeded() async throws -> LibraryRepositoryReference {
+    private func resolveCurrentRepositoryIfNeeded() async throws -> LibraryRepositoryReference? {
         if let currentRepository = sessionState.currentRepository {
             currentRepositoryChanged(currentRepository)
             return currentRepository
@@ -336,61 +446,24 @@ final class LibraryStore: ObservableObject {
             return ownedRepository
         }
 
-        let bootstrap = try await remoteService.bootstrapOwnedRepository(
-            ownerProfileID: sessionState.ownerProfileID,
-            preferredName: configuration.preferredOwnedRepositoryName
-        )
+        guard let descriptor = try await remoteService.fetchOwnedRepository(ownerProfileID: sessionState.ownerProfileID) else {
+            currentRepositoryChanged(nil)
+            return nil
+        }
 
-        let ownedRepository = LibraryRepositoryReference(
-            id: bootstrap.descriptor.id,
-            name: bootstrap.descriptor.name,
-            role: .owner,
-            accessAccount: bootstrap.credentials.account,
-            savedPassword: bootstrap.credentials.password
-        )
-
+        let ownedRepository = makeOwnedRepositoryReference(from: descriptor)
+        sessionState.ownerProfileID = descriptor.ownerProfileID
         sessionState.ownedRepository = ownedRepository
         sessionState.currentRepository = ownedRepository
         persistSessionState()
         return ownedRepository
     }
 
-    private func seedOwnedRepositoryIfNeeded(into repository: LibraryRepositoryReference) async throws {
-        guard !sessionStore.hasCompletedLegacyMigration(for: repository.id) else {
-            return
-        }
-
-        let importer = configuration.legacyImporter
-        let importedBooks = try await Task.detached(priority: .utility) {
-            try importer.loadBooks()
-        }.value
-
-        if importedBooks.isEmpty {
-            sessionStore.markLegacyMigrationCompleted(for: repository.id)
-            return
-        }
-
-        let remoteBooks = try await remoteService.fetchBooks(in: repository.id)
-        guard remoteBooks.isEmpty else {
-            sessionStore.markLegacyMigrationCompleted(for: repository.id)
-            return
-        }
-
-        for imported in importedBooks.sorted(by: { $0.book.updatedAt < $1.book.updatedAt }) {
-            _ = try await remoteService.upsertBook(imported.book, coverData: imported.coverData, in: repository.id)
-        }
-
-        try await Task.detached(priority: .utility) {
-            try importer.cleanupAfterMigration()
-        }.value
-
-        sessionStore.markLegacyMigrationCompleted(for: repository.id)
-    }
-
     private func reconcileRepositoryMetadata(for repositoryID: String) async throws {
         let descriptor = try await remoteService.fetchRepository(id: repositoryID)
 
         if var ownedRepository = sessionState.ownedRepository, ownedRepository.id == repositoryID {
+            sessionState.ownerProfileID = descriptor.ownerProfileID
             ownedRepository.name = descriptor.name
             ownedRepository.accessAccount = descriptor.accessAccount
             sessionState.ownedRepository = ownedRepository
@@ -469,6 +542,67 @@ final class LibraryStore: ObservableObject {
         return try await Task.detached(priority: .utility) {
             try cacheStore.loadSnapshot(repositoryID: repositoryID)
         }.value
+    }
+
+    private func ensureOwnedRepositoryForMigration() async throws -> LibraryRepositoryReference {
+        if let ownedRepository = sessionState.ownedRepository {
+            sessionState.currentRepository = ownedRepository
+            persistSessionState()
+            return ownedRepository
+        }
+
+        if let descriptor = try await remoteService.fetchOwnedRepository(ownerProfileID: sessionState.ownerProfileID) {
+            let ownedRepository = makeOwnedRepositoryReference(from: descriptor)
+            sessionState.ownerProfileID = descriptor.ownerProfileID
+            sessionState.ownedRepository = ownedRepository
+            sessionState.currentRepository = ownedRepository
+            persistSessionState()
+            return ownedRepository
+        }
+
+        let bootstrap = try await remoteService.createOwnedRepository(
+            ownerProfileID: sessionState.ownerProfileID,
+            preferredName: configuration.preferredOwnedRepositoryName
+        )
+        let ownedRepository = makeOwnedRepositoryReference(
+            from: bootstrap.descriptor,
+            savedPassword: bootstrap.credentials.password
+        )
+
+        sessionState.ownerProfileID = bootstrap.descriptor.ownerProfileID
+        sessionState.ownedRepository = ownedRepository
+        sessionState.currentRepository = ownedRepository
+        persistSessionState()
+        return ownedRepository
+    }
+
+    private func loadImportedBooks(
+        using importer: LegacyLibraryImporter,
+        from fileURL: URL
+    ) async throws -> [LegacyImportedBook] {
+        let didStartAccessingSecurityScopedResource = fileURL.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccessingSecurityScopedResource {
+                fileURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        return try await Task.detached(priority: .utility) {
+            try importer.loadBooks(from: fileURL)
+        }.value
+    }
+
+    private func makeOwnedRepositoryReference(
+        from descriptor: RepositoryDescriptor,
+        savedPassword: String? = nil
+    ) -> LibraryRepositoryReference {
+        LibraryRepositoryReference(
+            id: descriptor.id,
+            name: descriptor.name,
+            role: .owner,
+            accessAccount: descriptor.accessAccount,
+            savedPassword: savedPassword
+        )
     }
 
     private func persistSessionState() {

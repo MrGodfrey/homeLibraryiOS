@@ -195,6 +195,41 @@ final class LibraryPersistenceTests: XCTestCase {
         XCTAssertEqual(importedBooks.first?.coverData, Data("legacy-cover".utf8))
     }
 
+    func testLegacyImporterLoadsBooksFromExplicitImportFile() throws {
+        let rootURL = try makeTemporaryDirectory()
+        let importURL = rootURL.appendingPathComponent("LibraryImport.json")
+        let payload = """
+        {
+          "schemaVersion" : 1,
+          "source" : "unit-test",
+          "books" : [
+            {
+              "id" : "import-book",
+              "title" : "显式导入",
+              "author" : "作者 A",
+              "publisher" : "出版社 A",
+              "year" : "2024",
+              "location" : "成都",
+              "customFields" : {
+                "备注" : "外部文件"
+              },
+              "createdAt" : "\(LibraryJSONCodec.encodeDate(Date(timeIntervalSince1970: 1)))",
+              "updatedAt" : "\(LibraryJSONCodec.encodeDate(Date(timeIntervalSince1970: 2)))"
+            }
+          ]
+        }
+        """
+        try Data(payload.utf8).write(to: importURL, options: [.atomic])
+
+        let importer = LegacyLibraryImporter(storageRootURL: rootURL)
+        let importedBooks = try importer.loadBooks(from: importURL)
+
+        XCTAssertEqual(importedBooks.count, 1)
+        XCTAssertEqual(importedBooks.first?.book.id, "import-book")
+        XCTAssertEqual(importedBooks.first?.book.title, "显式导入")
+        XCTAssertEqual(importedBooks.first?.book.customFields["备注"], "外部文件")
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

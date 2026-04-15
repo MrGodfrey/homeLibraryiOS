@@ -66,7 +66,8 @@ nonisolated struct RemoteBookSnapshot: Sendable {
 }
 
 protocol LibraryRemoteSyncing {
-    func bootstrapOwnedRepository(ownerProfileID: String, preferredName: String) async throws -> RepositoryBootstrapResult
+    func fetchOwnedRepository(ownerProfileID: String) async throws -> RepositoryDescriptor?
+    func createOwnedRepository(ownerProfileID: String, preferredName: String) async throws -> RepositoryBootstrapResult
     func fetchRepository(id: String) async throws -> RepositoryDescriptor
     func joinRepository(account: String, password: String) async throws -> RepositoryDescriptor
     func rotateCredentials(for repositoryID: String, ownerProfileID: String) async throws -> RepositoryCredentials
@@ -111,7 +112,16 @@ actor InMemoryLibraryRemoteService: LibraryRemoteSyncing {
     private var repositoryIDsByOwnerProfileID: [String: String] = [:]
     private var snapshotsByRepositoryID: [String: [String: RemoteBookSnapshot]] = [:]
 
-    func bootstrapOwnedRepository(ownerProfileID: String, preferredName: String) async throws -> RepositoryBootstrapResult {
+    func fetchOwnedRepository(ownerProfileID: String) async throws -> RepositoryDescriptor? {
+        guard let repositoryID = repositoryIDsByOwnerProfileID[ownerProfileID],
+              let repository = repositoriesByID[repositoryID] else {
+            return nil
+        }
+
+        return repository.descriptor
+    }
+
+    func createOwnedRepository(ownerProfileID: String, preferredName: String) async throws -> RepositoryBootstrapResult {
         if let repositoryID = repositoryIDsByOwnerProfileID[ownerProfileID],
            let repository = repositoriesByID[repositoryID] {
             return RepositoryBootstrapResult(
@@ -312,7 +322,29 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         database = container.publicCloudDatabase
     }
 
-    func bootstrapOwnedRepository(ownerProfileID: String, preferredName: String) async throws -> RepositoryBootstrapResult {
+    func fetchOwnedRepository(ownerProfileID: String) async throws -> RepositoryDescriptor? {
+        try await ensureCloudAccountAvailable()
+
+        let currentUserRecordID = try await currentUserRecordID()
+        let query = CKQuery(
+            recordType: RecordType.repository,
+            predicate: NSPredicate(
+                format: "%K == %@",
+                CKRecord.SystemFieldKey.creatorUserRecordID,
+                currentUserRecordID
+            )
+        )
+
+        let records = try await performQuery(query)
+        guard !records.isEmpty else {
+            return nil
+        }
+
+        let selectedRecord = Self.selectOwnedRepository(from: records, preferredOwnerProfileID: ownerProfileID)
+        return try Self.makeRepositoryDescriptor(from: selectedRecord)
+    }
+
+    func createOwnedRepository(ownerProfileID: String, preferredName: String) async throws -> RepositoryBootstrapResult {
         try await ensureCloudAccountAvailable()
 
         let credentials = Self.generateCredentials()
@@ -385,8 +417,10 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         let recordID = CKRecord.ID(recordName: repositoryID)
         let record = try await fetchRecord(recordID: recordID)
         let remoteOwnerProfileID = try Self.requireStringField(RepositoryField.ownerProfileID, in: record)
+        let currentUserRecordID = try await currentUserRecordID()
 
-        guard remoteOwnerProfileID == ownerProfileID else {
+        guard remoteOwnerProfileID == ownerProfileID ||
+                record.creatorUserRecordID?.recordName == currentUserRecordID.recordName else {
             throw LibraryRemoteServiceError.permissionDenied
         }
 
@@ -513,6 +547,14 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
                     continuation.resume(returning: status)
                 }
             }
+        }
+    }
+
+    private func currentUserRecordID() async throws -> CKRecord.ID {
+        do {
+            return try await container.userRecordID()
+        } catch {
+            throw mapCloudError(error)
         }
     }
 
@@ -670,6 +712,20 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         )
     }
 
+    nonisolated private static func selectOwnedRepository(
+        from records: [CKRecord],
+        preferredOwnerProfileID: String
+    ) -> CKRecord {
+        let preferredRecords = records.filter { record in
+            (record[RepositoryField.ownerProfileID] as? String) == preferredOwnerProfileID
+        }
+
+        let candidates = preferredRecords.isEmpty ? records : preferredRecords
+        return candidates.max { left, right in
+            repositoryUpdatedAt(left) < repositoryUpdatedAt(right)
+        } ?? records[0]
+    }
+
     nonisolated private static func makeRemoteBookSnapshot(
         from record: CKRecord,
         fallbackCoverData: Data? = nil
@@ -792,6 +848,14 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         let digest = SHA256.hash(data: data)
         let hex = digest.map { String(format: "%02x", $0) }.joined()
         return "cover-\(hex)"
+    }
+
+    nonisolated private static func repositoryUpdatedAt(_ record: CKRecord) -> Date {
+        if let updatedAt = record[RepositoryField.updatedAt] as? Date {
+            return updatedAt
+        }
+
+        return record.modificationDate ?? .distantPast
     }
 }
 

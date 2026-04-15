@@ -37,14 +37,9 @@ struct LibraryAppConfiguration {
             "default"
         let containerIdentifier = environment["HOME_LIBRARY_CLOUDKIT_CONTAINER"]?.nilIfEmpty ??
             defaultCloudContainerIdentifier
-        let bundleResourceURL = environment["HOME_LIBRARY_DISABLE_BUNDLED_SEED"] == "1" ? nil : bundle.resourceURL
-
         return LibraryAppConfiguration(
             cacheStore: LibraryCacheStore(rootURL: storageRootURL.appendingPathComponent("cloudkit-cache", isDirectory: true)),
-            legacyImporter: LegacyLibraryImporter(
-                storageRootURL: storageRootURL,
-                bundleResourceURL: bundleResourceURL
-            ),
+            legacyImporter: LegacyLibraryImporter(storageRootURL: storageRootURL),
             sessionStore: RepositorySessionStore(namespace: sessionNamespace),
             remoteService: makeRemoteService(
                 environment: environment,
