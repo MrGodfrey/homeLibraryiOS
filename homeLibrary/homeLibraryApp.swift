@@ -47,14 +47,39 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         configurationForConnecting connectingSceneSession: UISceneSession,
         options: UIScene.ConnectionOptions
     ) -> UISceneConfiguration {
-        if let metadata = options.cloudKitShareMetadata {
-            deliver(metadata)
-        }
-
-        return UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
+        let configuration = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
+        configuration.delegateClass = CloudShareSceneDelegate.self
+        return configuration
     }
 
     func application(_ application: UIApplication, userDidAcceptCloudKitShareWith cloudKitShareMetadata: CKShare.Metadata) {
+        deliver(cloudKitShareMetadata)
+    }
+
+    private func deliver(_ metadata: CKShare.Metadata) {
+        Task { @MainActor in
+            CloudShareDeliveryCenter.shared.enqueue(metadata)
+        }
+    }
+}
+
+final class CloudShareSceneDelegate: NSObject, UIWindowSceneDelegate {
+    func scene(
+        _ scene: UIScene,
+        willConnectTo session: UISceneSession,
+        options connectionOptions: UIScene.ConnectionOptions
+    ) {
+        guard let metadata = connectionOptions.cloudKitShareMetadata else {
+            return
+        }
+
+        deliver(metadata)
+    }
+
+    func windowScene(
+        _ windowScene: UIWindowScene,
+        userDidAcceptCloudKitShareWith cloudKitShareMetadata: CKShare.Metadata
+    ) {
         deliver(cloudKitShareMetadata)
     }
 
@@ -72,16 +97,30 @@ final class CloudShareDeliveryCenter: ObservableObject {
     @Published private(set) var deliverySequence = 0
 
     private var pendingMetadata: [CKShare.Metadata] = []
+    private var pendingKeys: Set<String> = []
 
     private init() {}
 
     func enqueue(_ metadata: CKShare.Metadata) {
+        let key = Self.makeKey(for: metadata)
+        guard pendingKeys.insert(key).inserted else {
+            return
+        }
+
         pendingMetadata.append(metadata)
         deliverySequence &+= 1
     }
 
     func drainPendingMetadata() -> [CKShare.Metadata] {
-        defer { pendingMetadata.removeAll() }
+        defer {
+            pendingMetadata.removeAll()
+            pendingKeys.removeAll()
+        }
         return pendingMetadata
+    }
+
+    private nonisolated static func makeKey(for metadata: CKShare.Metadata) -> String {
+        let recordID = metadata.share.recordID
+        return "\(recordID.zoneID.ownerName):\(recordID.zoneID.zoneName):\(recordID.recordName)"
     }
 }

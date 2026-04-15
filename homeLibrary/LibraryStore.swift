@@ -10,6 +10,39 @@ import Combine
 import Foundation
 import UIKit
 
+nonisolated enum AcceptedShareRepositoryResolver {
+    static func preferredRepository(
+        from repositories: [LibraryRepositoryReference],
+        existingIDs: Set<String>,
+        preferredSharedZoneID: CKRecordZone.ID?
+    ) -> LibraryRepositoryReference? {
+        if let preferredSharedZoneID,
+           let matchedRepository = repositories.first(where: {
+               $0.databaseScope == .shared &&
+               $0.zoneName == preferredSharedZoneID.zoneName &&
+               $0.zoneOwnerName == preferredSharedZoneID.ownerName
+           }) {
+            return matchedRepository
+        }
+
+        if let newSharedRepository = repositories.first(where: {
+            $0.databaseScope == .shared && !existingIDs.contains(repositoryIdentity(for: $0))
+        }) {
+            return newSharedRepository
+        }
+
+        if let newRepository = repositories.first(where: { !existingIDs.contains(repositoryIdentity(for: $0)) }) {
+            return newRepository
+        }
+
+        return repositories.first(where: { $0.databaseScope == .shared })
+    }
+
+    static func repositoryIdentity(for repository: LibraryRepositoryReference) -> String {
+        "\(repository.databaseScope.rawValue):\(repository.id)"
+    }
+}
+
 @MainActor
 final class LibraryStore: ObservableObject {
     @Published private(set) var books: [Book] = []
@@ -26,6 +59,7 @@ final class LibraryStore: ObservableObject {
     @Published var alertMessage: String?
     @Published private(set) var importProgress: RepositoryImportProgress?
     @Published private(set) var latestExportURL: URL?
+    @Published private(set) var isAcceptingShareLink = false
 
     private let configuration: LibraryAppConfiguration
     private let cacheStore: LibraryCacheStore
@@ -74,6 +108,10 @@ final class LibraryStore: ObservableObject {
 
     var canManageSharing: Bool {
         currentRepository?.isOwner == true && remoteService is CloudKitLibraryService
+    }
+
+    var canAcceptShareLinks: Bool {
+        remoteService is any LibraryShareLinkAccepting
     }
 
     func isCurrentRepository(_ repository: LibraryRepositoryReference) -> Bool {
@@ -490,21 +528,60 @@ final class LibraryStore: ObservableObject {
         return try await service.makeSharingController(for: repository)
     }
 
+    @discardableResult
+    func acceptShareLink(_ rawValue: String) async -> Bool {
+        guard let service = remoteService as? any LibraryShareLinkAccepting else {
+            alertMessage = "当前配置不支持通过链接加入共享仓库。"
+            return false
+        }
+
+        guard let url = Self.shareURL(from: rawValue) else {
+            alertMessage = "请输入有效的 iCloud 共享链接。"
+            return false
+        }
+
+        guard !isAcceptingShareLink else {
+            return false
+        }
+
+        isAcceptingShareLink = true
+        defer { isAcceptingShareLink = false }
+
+        do {
+            let existingIDs = repositoryIdentitySet(from: availableRepositories)
+            let metadata = try await service.acceptShare(from: url)
+            try await finalizeAcceptedShare(
+                existingIDs: existingIDs,
+                preferredSharedZoneID: metadata.share.recordID.zoneID
+            )
+
+            if let repository = currentRepository {
+                alertMessage = "已打开共享仓库：\(repository.name)"
+            } else {
+                alertMessage = "已接受共享邀请。"
+            }
+
+            return true
+        } catch {
+            let message = Self.userFacingMessage(for: error)
+            alertMessage = message
+            syncStatus = .failed(message)
+            return false
+        }
+    }
+
     func acceptShareMetadata(_ metadata: CKShare.Metadata) async {
-        guard let service = remoteService as? CloudKitLibraryService else {
+        guard let service = remoteService as? any LibraryShareMetadataAccepting else {
             return
         }
 
         do {
-            let existingIDs = Set(availableRepositories.map { "\($0.databaseScope.rawValue):\($0.id)" })
+            let existingIDs = repositoryIdentitySet(from: availableRepositories)
             try await service.acceptShare(metadata: metadata)
-            let repositories = try await remoteService.listRepositories()
-            availableRepositories = repositories
-            if let newRepository = repositories.first(where: { !existingIDs.contains("\($0.databaseScope.rawValue):\($0.id)") }) {
-                sessionState.currentRepository = newRepository
-                persistSessionState()
-            }
-            await loadBooks(force: true)
+            try await finalizeAcceptedShare(
+                existingIDs: existingIDs,
+                preferredSharedZoneID: metadata.share.recordID.zoneID
+            )
         } catch {
             let message = Self.userFacingMessage(for: error)
             alertMessage = message
@@ -527,6 +604,41 @@ final class LibraryStore: ObservableObject {
 
     private var locationsByID: [String: LibraryLocation] {
         Dictionary(uniqueKeysWithValues: locations.map { ($0.id, $0) })
+    }
+
+    private func finalizeAcceptedShare(
+        existingIDs: Set<String>,
+        preferredSharedZoneID: CKRecordZone.ID?
+    ) async throws {
+        let repositories = try await remoteService.listRepositories()
+        availableRepositories = repositories
+
+        if let repository = AcceptedShareRepositoryResolver.preferredRepository(
+            from: repositories,
+            existingIDs: existingIDs,
+            preferredSharedZoneID: preferredSharedZoneID
+        ) {
+            sessionState.currentRepository = repository
+            persistSessionState()
+        }
+
+        await loadBooks(force: true)
+    }
+
+    private func repositoryIdentitySet(from repositories: [LibraryRepositoryReference]) -> Set<String> {
+        Set(repositories.map(AcceptedShareRepositoryResolver.repositoryIdentity(for:)))
+    }
+
+    private nonisolated static func shareURL(from rawValue: String) -> URL? {
+        guard let trimmed = rawValue.trimmed.nilIfEmpty,
+              let url = URL(string: trimmed),
+              let scheme = url.scheme?.lowercased(),
+              ["http", "https"].contains(scheme),
+              url.path.contains("/share/") else {
+            return nil
+        }
+
+        return url
     }
 
     private var visibleLocations: [LibraryLocation] {

@@ -18,6 +18,7 @@ struct RepositoryManagementView: View {
     @State private var isShowingClearConfirmation = false
     @State private var activitySheetItem: ActivitySheetItem?
     @State private var sharingControllerItem: SharingControllerItem?
+    @State private var incomingShareLink = ""
 
     var body: some View {
         NavigationStack {
@@ -28,13 +29,17 @@ struct RepositoryManagementView: View {
                 if store.hasRepository {
                     locationsSection
 
-                    if store.canManageSharing {
+                    if store.canManageSharing || store.canAcceptShareLinks {
                         sharingSection
                     }
 
                     advancedManagementSection
                 } else {
                     createRepositorySection
+
+                    if store.canAcceptShareLinks {
+                        sharingSection
+                    }
                 }
             }
             .libraryFormChrome()
@@ -235,16 +240,79 @@ struct RepositoryManagementView: View {
 
     private var sharingSection: some View {
         Section {
-            Text("通过系统共享把这座家庭书库发给家人，加入和权限管理都交给 Apple ID 完成。")
-                .font(.footnote)
-                .foregroundStyle(LibraryTheme.secondaryText)
+            if store.canManageSharing {
+                Text("通过系统共享把这座家庭书库发给家人，加入和权限管理都交给 Apple ID 完成。")
+                    .font(.footnote)
+                    .foregroundStyle(LibraryTheme.secondaryText)
 
-            Button {
-                Task {
-                    await openSharingController()
+                Button {
+                    Task {
+                        await openSharingController()
+                    }
+                } label: {
+                    formActionLabel(title: "邀请家人加入", systemName: "person.crop.circle.badge.plus", tint: LibraryTheme.accent)
                 }
-            } label: {
-                formActionLabel(title: "邀请家人加入", systemName: "person.crop.circle.badge.plus", tint: LibraryTheme.accent)
+            }
+
+            if store.canAcceptShareLinks {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("如果系统邀请没有自动打开共享仓库，可以把 iCloud 共享链接粘贴到这里手动处理。首先，你需要在“邀请家人加入”中通过 Message（最好是通过 iMessage）发送邀请，这样才能够打开这个仓库，否则这个仓库会显示不存在。")
+                        .font(.footnote)
+                        .foregroundStyle(LibraryTheme.secondaryText)
+
+                    TextField("https://www.icloud.com/share/...", text: $incomingShareLink, axis: .vertical)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(LibraryTheme.bodyText)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(LibraryTheme.surfaceSecondary)
+                        )
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(LibraryTheme.stroke, lineWidth: 1)
+                        }
+                        .accessibilityIdentifier("shareLinkTextField")
+
+                    if store.isAcceptingShareLink {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                                .tint(LibraryTheme.accent)
+
+                            Text("正在处理共享链接…")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(LibraryTheme.bodyText)
+                        }
+                    }
+
+                    HStack(spacing: 12) {
+                        Button("粘贴剪贴板") {
+                            pasteShareLinkFromClipboard()
+                        }
+                        .disabled(store.isAcceptingShareLink)
+
+                        Button {
+                            Task {
+                                let didAccept = await store.acceptShareLink(incomingShareLink)
+                                if didAccept {
+                                    incomingShareLink = ""
+                                    dismiss()
+                                }
+                            }
+                        } label: {
+                            Text(store.isAcceptingShareLink ? "处理中..." : "打开共享仓库")
+                                .font(.system(size: 15, weight: .semibold))
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(LibraryTheme.accent)
+                        .disabled(incomingShareLink.trimmed.isEmpty || store.isAcceptingShareLink)
+                        .accessibilityIdentifier("acceptShareLinkButton")
+                    }
+                }
             }
         }
         header: {
@@ -366,6 +434,20 @@ struct RepositoryManagementView: View {
         case .failure(let error):
             store.alertMessage = LibraryStore.userFacingMessage(for: error)
         }
+    }
+
+    private func pasteShareLinkFromClipboard() {
+        if let url = UIPasteboard.general.url {
+            incomingShareLink = url.absoluteString
+            return
+        }
+
+        if let string = UIPasteboard.general.string?.trimmed.nilIfEmpty {
+            incomingShareLink = string
+            return
+        }
+
+        store.alertMessage = "剪贴板里没有可用的共享链接。"
     }
 
     private func syncDraftLocations() {

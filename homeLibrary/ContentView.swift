@@ -16,8 +16,6 @@ struct ContentView: View {
     @State private var pendingDeleteBook: Book?
     @State private var selectedBookID: String?
     @State private var isShowingRepositorySheet = false
-    @State private var headerCollapseProgress: CGFloat = 0
-    @State private var headerIntroHeight: CGFloat = 0
     @State private var libraryContentWidth: CGFloat = 0
 
     var body: some View {
@@ -98,42 +96,18 @@ struct ContentView: View {
             .refreshable {
                 await store.loadBooks(force: true)
             }
-            .onScrollGeometryChange(for: CGFloat.self, of: { scrollGeometry in
-                max(0, scrollGeometry.contentOffset.y + scrollGeometry.contentInsets.top)
-            }) { _, offset in
-                headerCollapseProgress = max(0, min(offset / 88, 1))
-            }
         }
     }
 
     private var fixedHeader: some View {
-        VStack(alignment: .leading, spacing: max(10, 18 - headerCollapseProgress * 8)) {
+        VStack(alignment: .leading, spacing: 18) {
             headerIntro
-                .background {
-                    GeometryReader { proxy in
-                        Color.clear
-                            .preference(key: HeaderIntroHeightPreferenceKey.self, value: proxy.size.height)
-                    }
-                }
-                .onPreferenceChange(HeaderIntroHeightPreferenceKey.self) { height in
-                    guard height > 0 else {
-                        return
-                    }
 
-                    headerIntroHeight = height
-                }
-                .frame(height: headerIntroVisibleHeight, alignment: .top)
-                .clipped()
-                .opacity(1 - headerCollapseProgress)
-                .scaleEffect(1 - headerCollapseProgress * 0.04, anchor: .topLeading)
-                .offset(y: -headerCollapseProgress * 14)
-                .allowsHitTesting(!isHeaderCompact)
-
-            headerControls(compact: isHeaderCompact)
+            headerControls(compact: false)
         }
         .padding(.horizontal, 20)
-        .padding(.top, max(10, 16 - headerCollapseProgress * 6))
-        .padding(.bottom, max(12, 18 - headerCollapseProgress * 6))
+        .padding(.top, 16)
+        .padding(.bottom, 18)
         .background {
             LibraryTheme.background
                 .ignoresSafeArea(edges: .top)
@@ -143,7 +117,6 @@ struct ContentView: View {
                         .frame(height: 1)
                 }
         }
-        .animation(.snappy(duration: 0.22), value: isHeaderCompact)
     }
 
     private var headerIntro: some View {
@@ -555,18 +528,6 @@ struct ContentView: View {
         !store.searchText.trimmed.isEmpty || store.selectedLocationID != nil
     }
 
-    private var headerIntroVisibleHeight: CGFloat? {
-        guard headerIntroHeight > 0 else {
-            return nil
-        }
-
-        return max(0, headerIntroHeight * (1 - headerCollapseProgress))
-    }
-
-    private var isHeaderCompact: Bool {
-        headerCollapseProgress > 0.58
-    }
-
     private var bookGridLayout: LibraryBookGridLayout {
         LibraryBookGridLayout(
             availableWidth: gridContainerWidth,
@@ -837,14 +798,6 @@ private struct BookThumbnail: View {
 
 private struct SendablePlatformImage: @unchecked Sendable {
     let image: PlatformImage?
-}
-
-private struct HeaderIntroHeightPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
 }
 
 private struct LibraryContentWidthPreferenceKey: PreferenceKey {

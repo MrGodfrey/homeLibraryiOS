@@ -190,6 +190,72 @@ final class homeLibraryTests: XCTestCase {
         XCTAssertEqual(message, "CloudKit 网络连接失败，请确认 iPhone 已联网并关闭代理或 VPN 后重试。")
     }
 
+    func testPreferredRepositoryAfterAcceptUsesSharedZoneMatch() {
+        let ownerRepository = LibraryRepositoryReference(
+            id: "library.owner",
+            name: "我的书库",
+            role: .owner,
+            databaseScope: .private,
+            zoneName: "library.owner",
+            zoneOwnerName: CKCurrentUserDefaultName,
+            shareRecordName: nil,
+            shareStatus: .shared
+        )
+        let sharedRepository = LibraryRepositoryReference(
+            id: "library.shared",
+            name: "家庭共享书库",
+            role: .member,
+            databaseScope: .shared,
+            zoneName: "library.shared",
+            zoneOwnerName: "_ownerA_",
+            shareRecordName: "share-record",
+            shareStatus: .shared
+        )
+
+        let existingIDs: Set<String> = [
+            "\(ownerRepository.databaseScope.rawValue):\(ownerRepository.id)",
+            "\(sharedRepository.databaseScope.rawValue):\(sharedRepository.id)"
+        ]
+        let selectedRepository = AcceptedShareRepositoryResolver.preferredRepository(
+            from: [ownerRepository, sharedRepository],
+            existingIDs: existingIDs,
+            preferredSharedZoneID: CKRecordZone.ID(zoneName: "library.shared", ownerName: "_ownerA_")
+        )
+
+        XCTAssertEqual(selectedRepository, sharedRepository)
+    }
+
+    func testPreferredRepositoryAfterAcceptFallsBackToNewSharedRepository() {
+        let ownerRepository = LibraryRepositoryReference(
+            id: "library.owner",
+            name: "我的书库",
+            role: .owner,
+            databaseScope: .private,
+            zoneName: "library.owner",
+            zoneOwnerName: CKCurrentUserDefaultName,
+            shareRecordName: nil,
+            shareStatus: .shared
+        )
+        let sharedRepository = LibraryRepositoryReference(
+            id: "library.shared",
+            name: "家庭共享书库",
+            role: .member,
+            databaseScope: .shared,
+            zoneName: "library.shared",
+            zoneOwnerName: "_ownerB_",
+            shareRecordName: "share-record",
+            shareStatus: .shared
+        )
+
+        let selectedRepository = AcceptedShareRepositoryResolver.preferredRepository(
+            from: [ownerRepository, sharedRepository],
+            existingIDs: ["\(ownerRepository.databaseScope.rawValue):\(ownerRepository.id)"],
+            preferredSharedZoneID: Optional<CKRecordZone.ID>.none
+        )
+
+        XCTAssertEqual(selectedRepository, sharedRepository)
+    }
+
     @MainActor
     func testStoreCreatesRepositoryAndLoadsDefaultLocations() async throws {
         let namespace = "store-create-\(UUID().uuidString)"

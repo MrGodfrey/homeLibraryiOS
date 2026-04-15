@@ -67,6 +67,14 @@ protocol LibraryRemoteSyncing {
     func deleteRepository(_ repository: LibraryRepositoryReference) async throws
 }
 
+protocol LibraryShareMetadataAccepting {
+    func acceptShare(metadata: CKShare.Metadata) async throws
+}
+
+protocol LibraryShareLinkAccepting {
+    func acceptShare(from url: URL) async throws -> CKShare.Metadata
+}
+
 enum LibraryRemoteServiceError: LocalizedError {
     case repositoryNotFound
     case shareNotAvailable
@@ -1054,6 +1062,14 @@ final class CloudKitLibraryService: NSObject, LibraryRemoteSyncing {
         let digest = SHA256.hash(data: data)
         let hex = digest.map { String(format: "%02x", $0) }.joined()
         return "cover-\(hex)"
+    }
+}
+
+extension CloudKitLibraryService: LibraryShareMetadataAccepting, LibraryShareLinkAccepting {
+    func acceptShare(from url: URL) async throws -> CKShare.Metadata {
+        let metadata = try await shareMetadata(for: url)
+        try await acceptShare(metadata: metadata)
+        return metadata
     }
 }
 
