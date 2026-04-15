@@ -15,6 +15,7 @@ final class homeLibraryUITests: XCTestCase {
         app = XCUIApplication()
         app.launchEnvironment["HOME_LIBRARY_STORAGE_NAMESPACE"] = "ui-tests-\(UUID().uuidString)"
         app.launchEnvironment["HOME_LIBRARY_REMOTE_DRIVER"] = "memory"
+        XCUIDevice.shared.orientation = .portrait
         app.launch()
     }
 
@@ -58,42 +59,80 @@ final class homeLibraryUITests: XCTestCase {
 
         let titleField = app.textFields["titleField"]
         XCTAssertTrue(titleField.waitForExistence(timeout: 5))
-        titleField.tap()
-        titleField.typeText(title)
+        enterText(title, into: titleField)
 
         let authorField = app.textFields["authorField"]
-        authorField.tap()
-        authorField.typeText(author)
+        enterText(author, into: authorField)
 
         let publisherField = app.textFields["publisherField"]
-        publisherField.tap()
-        publisherField.typeText(publisher)
+        enterText(publisher, into: publisherField)
 
         let yearField = app.textFields["yearField"]
-        yearField.tap()
-        yearField.typeText(year)
+        enterText(year, into: yearField)
 
         app.buttons["saveBookButton"].tap()
     }
 
     private func createOwnedRepositoryIfNeeded() {
-        if app.buttons["创建我的仓库"].waitForExistence(timeout: 5) {
-            app.buttons["创建我的仓库"].tap()
+        let labeledCreateButton = app.buttons["创建我的仓库"].firstMatch
+        let identifiedCreateButton = app.buttons["createOwnedRepositoryButton"].firstMatch
+
+        if labeledCreateButton.waitForExistence(timeout: 2) {
+            tapElement(labeledCreateButton)
+        } else if identifiedCreateButton.waitForExistence(timeout: 3) {
+            tapElement(identifiedCreateButton)
         }
 
         XCTAssertTrue(app.buttons["addBookButton"].waitForExistence(timeout: 5))
     }
 
     private func replaceText(in element: XCUIElement, with value: String) {
+        focusTextInput(element)
+
         guard let existingValue = element.value as? String else {
-            element.tap()
             element.typeText(value)
             return
         }
 
-        element.tap()
         element.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existingValue.count))
         element.typeText(value)
+    }
+
+    private func enterText(_ value: String, into element: XCUIElement) {
+        focusTextInput(element)
+        element.typeText(value)
+    }
+
+    private func focusTextInput(_ element: XCUIElement, timeout: TimeInterval = 5) {
+        XCTAssertTrue(element.waitForExistence(timeout: timeout))
+
+        for attempt in 0..<3 {
+            if attempt == 0, element.isHittable {
+                element.tap()
+            } else {
+                element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            }
+
+            if waitForKeyboardFocus(on: element, timeout: 1) {
+                return
+            }
+        }
+
+        XCTFail("Failed to focus text input \(element)")
+    }
+
+    private func waitForKeyboardFocus(on element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+
+        repeat {
+            if element.debugDescription.contains("Keyboard Focused") {
+                return true
+            }
+
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } while Date() < deadline
+
+        return false
     }
 
     private func tapElement(_ element: XCUIElement, timeout: TimeInterval = 5) {

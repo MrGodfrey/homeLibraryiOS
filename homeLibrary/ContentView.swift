@@ -148,6 +148,7 @@ struct ContentView: View {
                             }
                         }
                         .disabled(store.isCreatingRepository || store.isImportingLegacyData)
+                        .accessibilityIdentifier("createOwnedRepositoryButton")
 
                         Button(store.isImportingLegacyData ? "导入中..." : "迁移旧数据") {
                             isShowingLegacyImportPicker = true

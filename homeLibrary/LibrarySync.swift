@@ -87,6 +87,7 @@ enum LibraryRemoteServiceError: LocalizedError {
     case accountTemporarilyUnavailable
     case invalidContainerConfiguration
     case missingEntitlement
+    case missingQueryableIndex(field: String?)
     case unknown(String)
 
     var errorDescription: String? {
@@ -115,6 +116,12 @@ enum LibraryRemoteServiceError: LocalizedError {
             return "CloudKit 容器配置无效，请检查 App ID、Bundle ID 和 iCloud 容器设置。"
         case .missingEntitlement:
             return "应用缺少 CloudKit 权限，请检查签名和 iCloud capability 配置。"
+        case .missingQueryableIndex(let field):
+            if let field, !field.isEmpty {
+                return "CloudKit schema 缺少 QUERYABLE 索引：\(field)。请在 CloudKit Dashboard 的 Schema 里为该字段添加 QUERYABLE。"
+            }
+
+            return "CloudKit schema 缺少 QUERYABLE 索引。请在 CloudKit Dashboard 的 Schema 里为相关字段添加 QUERYABLE。"
         case .unknown(let message):
             return message
         }
@@ -348,16 +355,10 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         try await ensureCloudAccountAvailable()
 
         let currentUserRecordID = try await currentUserRecordID()
-        let query = CKQuery(
-            recordType: RecordType.repository,
-            predicate: NSPredicate(
-                format: "%K == %@",
-                CKRecord.SystemFieldKey.creatorUserRecordID,
-                currentUserRecordID
-            )
-        )
-
-        let records = try await performQuery(query)
+        let records = try await performUnfilteredQuery(recordType: RecordType.repository)
+            .filter { record in
+                record.creatorUserRecordID?.recordName == currentUserRecordID.recordName
+            }
         guard !records.isEmpty else {
             return nil
         }
@@ -413,12 +414,8 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
             throw LibraryRemoteServiceError.invalidRepositoryCredentials
         }
 
-        let query = CKQuery(
-            recordType: RecordType.repository,
-            predicate: NSPredicate(format: "%K == %@", RepositoryField.accessAccount, normalizedAccount)
-        )
-
-        guard let record = try await performQuery(query, resultsLimit: 1).first else {
+        let records = try await performUnfilteredQuery(recordType: RecordType.repository)
+        guard let record = records.first(where: { ($0[RepositoryField.accessAccount] as? String) == normalizedAccount }) else {
             throw LibraryRemoteServiceError.repositoryNotFound
         }
 
@@ -462,15 +459,14 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
     func fetchBooks(in repositoryID: String) async throws -> [RemoteBookSnapshot] {
         try await ensureCloudAccountAvailable()
 
-        let query = CKQuery(
-            recordType: RecordType.book,
-            predicate: NSPredicate(format: "%K == %@", BookField.repositoryID, repositoryID)
-        )
-
-        let records = try await performQuery(query)
+        let records = try await performUnfilteredQuery(recordType: RecordType.book)
         var snapshots: [RemoteBookSnapshot] = []
 
         for record in records {
+            guard (record[BookField.repositoryID] as? String) == repositoryID else {
+                continue
+            }
+
             if record[BookField.deletedAt] != nil {
                 continue
             }
@@ -729,6 +725,17 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         }
     }
 
+    private func performUnfilteredQuery(
+        recordType: String,
+        resultsLimit: Int = CKQueryOperation.maximumResults,
+        desiredKeys: [String]? = nil
+    ) async throws -> [CKRecord] {
+        // Avoid hard dependency on CloudKit schema indexes such as __createdBy,
+        // accessAccount, and repositoryID during development and fresh containers.
+        let query = CKQuery(recordType: recordType, predicate: NSPredicate(value: true))
+        return try await performQuery(query, resultsLimit: resultsLimit, desiredKeys: desiredKeys)
+    }
+
     private func performRetryingCloudKitRequest<T>(
         _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
@@ -776,6 +783,10 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
             return error
         }
 
+        if let missingQueryableField = Self.extractMissingQueryableField(from: error.localizedDescription) {
+            return LibraryRemoteServiceError.missingQueryableIndex(field: missingQueryableField)
+        }
+
         switch error.code {
         case .networkUnavailable, .networkFailure, .serverResponseLost:
             return LibraryRemoteServiceError.networkUnavailable
@@ -796,6 +807,19 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         default:
             return LibraryRemoteServiceError.unknown(error.localizedDescription)
         }
+    }
+
+    nonisolated private static func extractMissingQueryableField(from message: String) -> String? {
+        let marker = "Field "
+        let suffix = " is not marked queryable"
+
+        guard let markerRange = message.range(of: marker),
+              let suffixRange = message.range(of: suffix),
+              markerRange.upperBound <= suffixRange.lowerBound else {
+            return nil
+        }
+
+        return String(message[markerRange.upperBound..<suffixRange.lowerBound]).trimmed.nilIfEmpty
     }
 
     nonisolated private static func makeRepositoryDescriptor(from record: CKRecord) throws -> RepositoryDescriptor {

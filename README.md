@@ -157,6 +157,121 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 
 如果你修改了 signing / capability，或者之前设备上安装过不带 CloudKit entitlement 的旧包，需要重新 build 并重新安装 app。
 
+### 5.1 CloudKit Dashboard 索引配置指南
+
+除了签名和 entitlement，当前项目还有一个很容易忽略的前提：**CloudKit Schema 里的索引必须配好**。
+
+如果真机上看到下面这类报错：
+
+- `Field __createdBy is not marked queryable`
+- `Field recordName is not marked queryable`
+- `Field accessAccount is not marked queryable`
+- `Field repositoryID is not marked queryable`
+
+这不是“网络断了”，而是 **CloudKit Schema 缺少 QUERYABLE 索引**。
+
+当前代码已经尽量减少了对索引的依赖。按 `2026-04-15` 之后的实现，最关键的是：
+
+- `LibraryRepository.recordName` 要有 `QUERYABLE`
+- `LibraryBook.recordName` 要有 `QUERYABLE`
+
+如果你后续又把查询逻辑改回“按字段直接查”，那还可能需要给下面字段补 `QUERYABLE`：
+
+- `LibraryRepository.__createdBy`
+- `LibraryRepository.accessAccount`
+- `LibraryBook.repositoryID`
+
+### 5.2 在 CloudKit Dashboard 里添加 QUERYABLE 的具体步骤
+
+下面步骤默认你在配置当前工程使用的容器：
+
+- 容器：`iCloud.yu.homeLibrary`
+- 开发环境：`Development`
+
+#### 第一步：打开容器
+
+1. 打开 [CloudKit Console](https://icloud.developer.apple.com/dashboard/)
+2. 登录和当前 Apple Developer Team 对应的开发者账号
+3. 选择容器 `iCloud.yu.homeLibrary`
+4. 先切到 `Development` 环境，不要一开始就在 `Production` 上改
+
+#### 第二步：检查 `LibraryRepository`
+
+1. 进入 `Schema`
+2. 找到 record type `LibraryRepository`
+3. 打开这个 record type 的字段或索引配置页
+4. 找到系统字段 `recordName`
+5. 把它标记为 `QUERYABLE`
+
+有些界面会把系统字段显示成 `recordName`，有些资料会写成 `___recordId`。这两个说的是同一个系统字段映射，不用纠结名字差异，关键是把 `recordName` 对应的查询索引打开。
+
+#### 第三步：检查 `LibraryBook`
+
+1. 继续留在 `Schema`
+2. 找到 record type `LibraryBook`
+3. 打开字段或索引配置页
+4. 找到系统字段 `recordName`
+5. 同样把它标记为 `QUERYABLE`
+
+#### 第四步：如果你仍然报其他字段 not marked queryable
+
+继续在对应 record type 里把报错字段补成 `QUERYABLE`：
+
+- 报 `__createdBy`：去 `LibraryRepository` 里给 `__createdBy` 加 `QUERYABLE`
+- 报 `accessAccount`：去 `LibraryRepository` 里给 `accessAccount` 加 `QUERYABLE`
+- 报 `repositoryID`：去 `LibraryBook` 里给 `repositoryID` 加 `QUERYABLE`
+
+#### 第五步：保存并等待 CloudKit 生效
+
+1. 保存 schema 修改
+2. 等待一小段时间让 CloudKit 后台完成索引更新
+3. 删除 iPhone 上已有的旧安装包
+4. 从 Xcode 重新 build 并安装到真机
+5. 重新打开 app 验证
+
+CloudKit 的索引更新不是完全瞬时的。如果你刚改完就立即重试，仍然看到旧错误，不一定是你改错了，也可能只是索引还没完全生效。
+
+### 5.3 什么时候还要把 Development 部署到 Production
+
+Xcode 直连真机调试时，通常先吃到的是 `Development` 环境的 schema。
+
+如果你后面准备：
+
+- 给其他测试人员安装
+- 用 TestFlight 分发
+- 走正式发布包
+
+那还需要把已经验证过的 schema 变更部署到 `Production`。否则会出现：
+
+- 开发机正常
+- 换一个包或换一个环境就再次报 schema / queryable 错误
+
+### 5.4 建议的最小排障顺序
+
+如果真机首次运行失败，建议按下面顺序排：
+
+1. 确认 iPhone 已登录可用的 iCloud 账号
+2. 确认 Xcode 安装到设备上的包带有 CloudKit entitlement
+3. 确认容器 `iCloud.yu.homeLibrary` 选对了 team 和环境
+4. 先检查 `LibraryRepository.recordName`
+5. 再检查 `LibraryBook.recordName`
+6. 如果仍失败，按错误原文继续给对应字段补 `QUERYABLE`
+7. 删除设备旧包，重新安装，再试一次
+
+### 5.5 当前项目和索引的关系
+
+当前项目使用两个 CloudKit record type：
+
+- `LibraryRepository`
+- `LibraryBook`
+
+其中：
+
+- `LibraryRepository` 负责仓库边界、拥有者信息和加入凭据
+- `LibraryBook` 负责书籍主记录、封面引用和软删除状态
+
+应用启动时会查询仓库记录；进入书库后会查询书籍记录。所以只要 Schema 里缺少对应索引，真机就可能在启动阶段直接报错，甚至还没走到书籍列表。
+
 ## 6. 代码结构
 
 ```text
