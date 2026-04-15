@@ -356,6 +356,56 @@ final class homeLibraryTests: XCTestCase {
         XCTAssertEqual(store.books.first?.title, "被导入的书")
     }
 
+    @MainActor
+    func testStoreImportNormalizesSeedLocationNamesIntoUsableLocationIDs() async throws {
+        let namespace = "store-seed-import-\(UUID().uuidString)"
+        let sessionStore = RepositorySessionStore(namespace: namespace)
+        let tempRoot = try makeTemporaryDirectory()
+        let configuration = LibraryAppConfiguration(
+            cacheStore: LibraryCacheStore(rootURL: tempRoot.appendingPathComponent("cloudkit-cache", isDirectory: true)),
+            legacyImporter: LegacyLibraryImporter(storageRootURL: tempRoot),
+            sessionStore: sessionStore,
+            remoteService: InMemoryLibraryRemoteService(),
+            preferredOwnedRepositoryName: "我的家庭书库"
+        )
+
+        let importURL = tempRoot.appendingPathComponent("SeedBooks.json")
+        let payload = """
+        {
+          "schemaVersion" : 2,
+          "source" : "seed-test",
+          "locations" : [
+            {
+              "id" : "",
+              "name" : "成都"
+            }
+          ],
+          "books" : [
+            {
+              "id" : "seed-book",
+              "title" : "种子导入",
+              "author" : "作者 Seed",
+              "publisher" : "出版社 Seed",
+              "year" : "2025",
+              "locationID" : "成都",
+              "customFields" : {},
+              "createdAt" : "\(LibraryJSONCodec.encodeDate(Date(timeIntervalSince1970: 1)))",
+              "updatedAt" : "\(LibraryJSONCodec.encodeDate(Date(timeIntervalSince1970: 2)))"
+            }
+          ]
+        }
+        """
+        try Data(payload.utf8).write(to: importURL)
+
+        let store = LibraryStore(configuration: configuration)
+        let didImport = await store.importLegacyJSON(from: importURL)
+
+        XCTAssertTrue(didImport)
+        XCTAssertEqual(store.locations.map(\.name), ["成都"])
+        XCTAssertEqual(store.locations.map(\.id), ["location.chengdu"])
+        XCTAssertEqual(store.books.first?.locationID, "location.chengdu")
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

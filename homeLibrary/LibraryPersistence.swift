@@ -153,11 +153,34 @@ nonisolated struct LibraryImportLocation: Codable, Sendable {
     var sortOrder: Int
     var isVisible: Bool
 
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case sortOrder
+        case isVisible
+    }
+
     init(location: LibraryLocation) {
         id = location.id
         name = location.name
         sortOrder = location.sortOrder
         isVisible = location.isVisible
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(String.self, forKey: .id) ?? ""
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+        sortOrder = try container.decodeIfPresent(Int.self, forKey: .sortOrder) ?? 0
+        isVisible = try container.decodeIfPresent(Bool.self, forKey: .isVisible) ?? true
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(sortOrder, forKey: .sortOrder)
+        try container.encode(isVisible, forKey: .isVisible)
     }
 
     nonisolated func makeLocation() -> LibraryLocation {
@@ -296,8 +319,21 @@ nonisolated struct LibraryImportBook: Codable, Sendable {
     }
 
     nonisolated func resolveLocationID(using locations: [LibraryLocation]) -> String {
-        if let locationID, locations.contains(where: { $0.id == locationID }) {
+        if let locationID = locationID?.trimmed.nilIfEmpty,
+           locations.contains(where: { $0.id == locationID }) {
             return locationID
+        }
+
+        if let locationID = locationID?.trimmed.nilIfEmpty,
+           let matchedLocation = locations.first(where: { $0.name == locationID }) {
+            return matchedLocation.id
+        }
+
+        if let locationID = locationID?.trimmed.nilIfEmpty {
+            let legacyLocationID = BookPayload.makeLocationID(fromLegacyName: locationID)
+            if locations.contains(where: { $0.id == legacyLocationID }) {
+                return legacyLocationID
+            }
         }
 
         if let locationName = locationName?.trimmed.nilIfEmpty,
@@ -837,54 +873,21 @@ nonisolated struct LegacyLibraryImporter: Sendable {
     }
 
     nonisolated private func inferredLocations(from package: LibraryImportPackage) -> [LibraryLocation] {
-        let explicitLocations = package.locations
-            .map { $0.makeLocation() }
-            .sorted(by: { $0.sortOrder < $1.sortOrder })
-
-        guard explicitLocations.isEmpty else {
-            return explicitLocations
-        }
-
+        let explicitLocations = normalizeImportedLocations(
+            package.locations
+                .map { $0.makeLocation() }
+                .sorted(by: { $0.sortOrder < $1.sortOrder })
+        )
         let defaultLocations = LibraryLocation.defaultLocations()
-        let defaultLocationsByID = Dictionary(uniqueKeysWithValues: defaultLocations.map { ($0.id, $0) })
-        let defaultLocationsByName = Dictionary(uniqueKeysWithValues: defaultLocations.map { ($0.name, $0) })
-        var resolvedLocations: [LibraryLocation] = []
-        var seenLocationIDs: Set<String> = []
+        var resolvedLocations = explicitLocations
+        var seenLocationIDs = Set(explicitLocations.map(\.id))
 
         for book in package.books {
-            let locationID = book.locationID?.trimmed.nilIfEmpty
-            let locationName = book.locationName?.trimmed.nilIfEmpty
-
-            let resolvedLocation: LibraryLocation?
-            if let locationID, let defaultLocation = defaultLocationsByID[locationID] {
-                resolvedLocation = LibraryLocation(
-                    id: defaultLocation.id,
-                    name: defaultLocation.name,
-                    sortOrder: resolvedLocations.count,
-                    isVisible: defaultLocation.isVisible
-                )
-            } else if let locationName, let defaultLocation = defaultLocationsByName[locationName] {
-                resolvedLocation = LibraryLocation(
-                    id: defaultLocation.id,
-                    name: defaultLocation.name,
-                    sortOrder: resolvedLocations.count,
-                    isVisible: defaultLocation.isVisible
-                )
-            } else if let locationID {
-                resolvedLocation = LibraryLocation(
-                    id: locationID,
-                    name: locationName ?? locationID,
-                    sortOrder: resolvedLocations.count
-                )
-            } else if let locationName {
-                resolvedLocation = LibraryLocation(
-                    id: BookPayload.makeLocationID(fromLegacyName: locationName),
-                    name: locationName,
-                    sortOrder: resolvedLocations.count
-                )
-            } else {
-                resolvedLocation = nil
-            }
+            let resolvedLocation = makeImportedLocation(
+                locationID: book.locationID,
+                locationName: book.locationName,
+                sortOrder: resolvedLocations.count
+            )
 
             guard let resolvedLocation,
                   seenLocationIDs.insert(resolvedLocation.id).inserted else {
@@ -895,6 +898,88 @@ nonisolated struct LegacyLibraryImporter: Sendable {
         }
 
         return resolvedLocations.isEmpty ? defaultLocations : resolvedLocations
+    }
+
+    nonisolated private func normalizeImportedLocations(_ importedLocations: [LibraryLocation]) -> [LibraryLocation] {
+        var normalizedLocations: [LibraryLocation] = []
+        var seenLocationIDs: Set<String> = []
+
+        for location in importedLocations {
+            guard let normalizedLocation = makeImportedLocation(
+                locationID: location.id,
+                locationName: location.name,
+                sortOrder: normalizedLocations.count,
+                isVisible: location.isVisible
+            ),
+            seenLocationIDs.insert(normalizedLocation.id).inserted else {
+                continue
+            }
+
+            normalizedLocations.append(normalizedLocation)
+        }
+
+        return normalizedLocations
+    }
+
+    nonisolated private func makeImportedLocation(
+        locationID: String?,
+        locationName: String?,
+        sortOrder: Int,
+        isVisible: Bool = true
+    ) -> LibraryLocation? {
+        let defaultLocations = LibraryLocation.defaultLocations()
+        let defaultLocationsByID = Dictionary(uniqueKeysWithValues: defaultLocations.map { ($0.id, $0) })
+        let defaultLocationsByName = Dictionary(uniqueKeysWithValues: defaultLocations.map { ($0.name, $0) })
+
+        let normalizedLocationID = locationID?.trimmed.nilIfEmpty
+        let normalizedLocationName = locationName?.trimmed.nilIfEmpty
+
+        if let normalizedLocationID, let defaultLocation = defaultLocationsByID[normalizedLocationID] {
+            return LibraryLocation(
+                id: defaultLocation.id,
+                name: normalizedLocationName ?? defaultLocation.name,
+                sortOrder: sortOrder,
+                isVisible: isVisible
+            )
+        }
+
+        if let normalizedLocationName, let defaultLocation = defaultLocationsByName[normalizedLocationName] {
+            return LibraryLocation(
+                id: defaultLocation.id,
+                name: defaultLocation.name,
+                sortOrder: sortOrder,
+                isVisible: isVisible
+            )
+        }
+
+        if let normalizedLocationID, let defaultLocation = defaultLocationsByName[normalizedLocationID] {
+            return LibraryLocation(
+                id: defaultLocation.id,
+                name: normalizedLocationName ?? defaultLocation.name,
+                sortOrder: sortOrder,
+                isVisible: isVisible
+            )
+        }
+
+        if let normalizedLocationID {
+            return LibraryLocation(
+                id: normalizedLocationID,
+                name: normalizedLocationName ?? normalizedLocationID.replacingOccurrences(of: "location.legacy.", with: ""),
+                sortOrder: sortOrder,
+                isVisible: isVisible
+            )
+        }
+
+        if let normalizedLocationName {
+            return LibraryLocation(
+                id: BookPayload.makeLocationID(fromLegacyName: normalizedLocationName),
+                name: normalizedLocationName,
+                sortOrder: sortOrder,
+                isVisible: isVisible
+            )
+        }
+
+        return nil
     }
 
     nonisolated private static func locations(from names: [String]) -> [LibraryLocation] {

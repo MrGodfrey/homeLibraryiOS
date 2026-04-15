@@ -10,6 +10,7 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var store: LibraryStore
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var editorTarget: EditorTarget?
     @State private var pendingDeleteBook: Book?
@@ -17,6 +18,7 @@ struct ContentView: View {
     @State private var isShowingRepositorySheet = false
     @State private var headerCollapseProgress: CGFloat = 0
     @State private var headerIntroHeight: CGFloat = 0
+    @State private var libraryContentWidth: CGFloat = 0
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -300,17 +302,32 @@ struct ContentView: View {
                 booksGrid
             }
         }
+        .background {
+            GeometryReader { proxy in
+                Color.clear
+                    .preference(key: LibraryContentWidthPreferenceKey.self, value: proxy.size.width)
+            }
+        }
+        .onPreferenceChange(LibraryContentWidthPreferenceKey.self) { width in
+            guard width > 0 else {
+                return
+            }
+
+            libraryContentWidth = width
+        }
     }
 
     private var booksGrid: some View {
-        LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 152, maximum: 240), spacing: 16, alignment: .top)],
+        let layout = bookGridLayout
+        return LazyVGrid(
+            columns: layout.columns,
             alignment: .leading,
-            spacing: 20
+            spacing: layout.rowSpacing
         ) {
             ForEach(store.visibleBooks) { book in
                 LibraryBookCard(
                     book: book,
+                    cardWidth: layout.cardWidth,
                     isSelected: selectedBookID == book.id,
                     coverLoader: store.coverData(for:),
                     onTap: {
@@ -333,6 +350,7 @@ struct ContentView: View {
                 .accessibilityIdentifier("bookCard-\(book.id)")
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var loadingState: some View {
@@ -548,6 +566,21 @@ struct ContentView: View {
     private var isHeaderCompact: Bool {
         headerCollapseProgress > 0.58
     }
+
+    private var bookGridLayout: LibraryBookGridLayout {
+        LibraryBookGridLayout(
+            availableWidth: gridContainerWidth,
+            horizontalSizeClass: horizontalSizeClass
+        )
+    }
+
+    private var gridContainerWidth: CGFloat {
+        let fallbackColumnCount = horizontalSizeClass == .regular ? 3 : 2
+        let fallbackWidth =
+            CGFloat(fallbackColumnCount) * LibraryBookGridLayout.minimumCardWidth +
+            CGFloat(fallbackColumnCount - 1) * LibraryBookGridLayout.columnSpacing
+        return max(libraryContentWidth, fallbackWidth)
+    }
 }
 private struct SyncStatusText: View {
     let status: LibrarySyncStatus
@@ -590,21 +623,30 @@ private extension LibrarySyncStatus {
 }
 
 private struct LibraryBookCard: View {
+    static let cardPadding: CGFloat = 8
     private static let coverAspectRatio: CGFloat = 0.72
 
     let book: Book
+    let cardWidth: CGFloat
     let isSelected: Bool
     let coverLoader: (String?) async -> Data?
     let onTap: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
 
+    private var contentWidth: CGFloat {
+        cardWidth - Self.cardPadding * 2
+    }
+
+    private var coverHeight: CGFloat {
+        contentWidth / Self.coverAspectRatio
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             ZStack {
                 BookThumbnail(assetID: book.coverAssetID, coverLoader: coverLoader)
-                    .aspectRatio(Self.coverAspectRatio, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
+                    .frame(width: contentWidth, height: coverHeight)
 
                 if isSelected {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -625,13 +667,14 @@ private struct LibraryBookCard: View {
                     }
                 }
             }
+            .frame(width: contentWidth, height: coverHeight)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(book.title)
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(LibraryTheme.title)
-                    .lineLimit(2)
+                    .lineLimit(3)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -645,6 +688,7 @@ private struct LibraryBookCard: View {
             .padding(.bottom, 10)
         }
         .padding(8)
+        .frame(width: cardWidth, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(LibraryTheme.surface)
@@ -677,6 +721,44 @@ private struct LibraryBookCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(identifier)
+    }
+}
+
+private struct LibraryBookGridLayout {
+    static let minimumCardWidth: CGFloat = 152
+    static let columnSpacing: CGFloat = 16
+    static let rowSpacing: CGFloat = 20
+    private static let compactColumnCount = 2
+    private static let regularMaximumColumnCount = 4
+
+    let availableWidth: CGFloat
+    let horizontalSizeClass: UserInterfaceSizeClass?
+
+    var rowSpacing: CGFloat { Self.rowSpacing }
+
+    var columnCount: Int {
+        let maxColumnsThatFit = max(
+            1,
+            Int((availableWidth + Self.columnSpacing) / (Self.minimumCardWidth + Self.columnSpacing))
+        )
+
+        if horizontalSizeClass == .regular {
+            return min(maxColumnsThatFit, Self.regularMaximumColumnCount)
+        }
+
+        return min(maxColumnsThatFit, Self.compactColumnCount)
+    }
+
+    var cardWidth: CGFloat {
+        let totalSpacing = CGFloat(max(0, columnCount - 1)) * Self.columnSpacing
+        return (availableWidth - totalSpacing) / CGFloat(columnCount)
+    }
+
+    var columns: [GridItem] {
+        Array(
+            repeating: GridItem(.fixed(cardWidth), spacing: Self.columnSpacing, alignment: .top),
+            count: columnCount
+        )
     }
 }
 
@@ -758,6 +840,14 @@ private struct SendablePlatformImage: @unchecked Sendable {
 }
 
 private struct HeaderIntroHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private struct LibraryContentWidthPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
