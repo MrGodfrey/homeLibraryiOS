@@ -15,6 +15,8 @@ struct ContentView: View {
     @State private var pendingDeleteBook: Book?
     @State private var selectedBookID: String?
     @State private var isShowingRepositorySheet = false
+    @State private var headerCollapseProgress: CGFloat = 0
+    @State private var headerIntroHeight: CGFloat = 0
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -94,17 +96,42 @@ struct ContentView: View {
             .refreshable {
                 await store.loadBooks(force: true)
             }
+            .onScrollGeometryChange(for: CGFloat.self, of: { scrollGeometry in
+                max(0, scrollGeometry.contentOffset.y + scrollGeometry.contentInsets.top)
+            }) { _, offset in
+                headerCollapseProgress = max(0, min(offset / 88, 1))
+            }
         }
     }
 
     private var fixedHeader: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: max(10, 18 - headerCollapseProgress * 8)) {
             headerIntro
-            headerControls
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear
+                            .preference(key: HeaderIntroHeightPreferenceKey.self, value: proxy.size.height)
+                    }
+                }
+                .onPreferenceChange(HeaderIntroHeightPreferenceKey.self) { height in
+                    guard height > 0 else {
+                        return
+                    }
+
+                    headerIntroHeight = height
+                }
+                .frame(height: headerIntroVisibleHeight, alignment: .top)
+                .clipped()
+                .opacity(1 - headerCollapseProgress)
+                .scaleEffect(1 - headerCollapseProgress * 0.04, anchor: .topLeading)
+                .offset(y: -headerCollapseProgress * 14)
+                .allowsHitTesting(!isHeaderCompact)
+
+            headerControls(compact: isHeaderCompact)
         }
         .padding(.horizontal, 20)
-        .padding(.top, 16)
-        .padding(.bottom, 18)
+        .padding(.top, max(10, 16 - headerCollapseProgress * 6))
+        .padding(.bottom, max(12, 18 - headerCollapseProgress * 6))
         .background {
             LibraryTheme.background
                 .ignoresSafeArea(edges: .top)
@@ -114,6 +141,7 @@ struct ContentView: View {
                         .frame(height: 1)
                 }
         }
+        .animation(.snappy(duration: 0.22), value: isHeaderCompact)
     }
 
     private var headerIntro: some View {
@@ -150,10 +178,10 @@ struct ContentView: View {
         }
     }
 
-    private var headerControls: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            searchBar()
-            locationFilterBar()
+    private func headerControls(compact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: compact ? 10 : 14) {
+            searchBar(compact: compact)
+            locationFilterBar(compact: compact)
         }
     }
 
@@ -180,10 +208,10 @@ struct ContentView: View {
         .accessibilityIdentifier(identifier)
     }
 
-    private func searchBar() -> some View {
+    private func searchBar(compact: Bool) -> some View {
         HStack(spacing: 12) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 20, weight: .medium))
+                .font(.system(size: compact ? 18 : 20, weight: .medium))
                 .foregroundStyle(LibraryTheme.tertiaryText)
 
             TextField(
@@ -193,7 +221,7 @@ struct ContentView: View {
                     .foregroundStyle(LibraryTheme.secondaryText)
             )
             .textFieldStyle(.plain)
-            .font(.system(size: 18, weight: .medium))
+            .font(.system(size: compact ? 16 : 18, weight: .medium))
             .foregroundStyle(LibraryTheme.bodyText)
             .autocorrectionDisabled()
             .textInputAutocapitalization(.never)
@@ -211,8 +239,8 @@ struct ContentView: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 17)
+        .padding(.horizontal, compact ? 16 : 18)
+        .padding(.vertical, compact ? 13 : 17)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(LibraryTheme.surface)
@@ -223,9 +251,9 @@ struct ContentView: View {
         }
     }
 
-    private func locationFilterBar() -> some View {
+    private func locationFilterBar(compact: Bool) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 12) {
+            HStack(spacing: compact ? 8 : 12) {
                 ForEach(store.visibleLocationFilters) { filter in
                     Button {
                         withAnimation(.snappy(duration: 0.2)) {
@@ -234,10 +262,10 @@ struct ContentView: View {
                         }
                     } label: {
                         Text(filter.title)
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(.system(size: compact ? 14 : 16, weight: .semibold))
                             .foregroundStyle(isActive(filter: filter) ? Color.white : LibraryTheme.bodyText)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 14)
+                            .padding(.horizontal, compact ? 16 : 20)
+                            .padding(.vertical, compact ? 10 : 14)
                             .background(
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                                     .fill(isActive(filter: filter) ? LibraryTheme.accent : LibraryTheme.surface)
@@ -508,6 +536,18 @@ struct ContentView: View {
     private var hasActiveFilters: Bool {
         !store.searchText.trimmed.isEmpty || store.selectedLocationID != nil
     }
+
+    private var headerIntroVisibleHeight: CGFloat? {
+        guard headerIntroHeight > 0 else {
+            return nil
+        }
+
+        return max(0, headerIntroHeight * (1 - headerCollapseProgress))
+    }
+
+    private var isHeaderCompact: Bool {
+        headerCollapseProgress > 0.58
+    }
 }
 private struct SyncStatusText: View {
     let status: LibrarySyncStatus
@@ -715,6 +755,14 @@ private struct BookThumbnail: View {
 
 private struct SendablePlatformImage: @unchecked Sendable {
     let image: PlatformImage?
+}
+
+private struct HeaderIntroHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
 }
 
 private enum CoverThumbnailRenderer {
