@@ -19,7 +19,7 @@ struct ContentView: View {
     @State private var libraryContentWidth: CGFloat = 0
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack {
             LibraryTheme.background
                 .ignoresSafeArea()
 
@@ -27,12 +27,6 @@ struct ContentView: View {
                 libraryContent
             } else {
                 emptyRepositoryState
-            }
-
-            if store.hasRepository {
-                addBookButton
-                    .padding(.trailing, 24)
-                    .padding(.bottom, 28)
             }
         }
         .task {
@@ -144,11 +138,15 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            headerActionButton(
-                systemName: "gearshape",
-                identifier: "repositoryManagementButton"
-            ) {
-                isShowingRepositorySheet = true
+            HStack(spacing: 10) {
+                addBookButton
+
+                headerActionButton(
+                    systemName: "gearshape",
+                    identifier: "repositoryManagementButton"
+                ) {
+                    isShowingRepositorySheet = true
+                }
             }
         }
     }
@@ -163,20 +161,23 @@ struct ContentView: View {
     private func headerActionButton(
         systemName: String,
         identifier: String,
+        fill: Color = LibraryTheme.surface,
+        foreground: Color = LibraryTheme.icon,
+        stroke: Color = LibraryTheme.stroke,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(LibraryTheme.icon)
+                .foregroundStyle(foreground)
                 .frame(width: 48, height: 48)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(LibraryTheme.surface)
+                        .fill(fill)
                 )
                 .overlay {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(LibraryTheme.stroke, lineWidth: 1)
+                        .stroke(stroke, lineWidth: 1)
                 }
         }
         .buttonStyle(.plain)
@@ -354,7 +355,7 @@ struct ContentView: View {
                 .font(.system(size: 22, weight: .bold))
                 .foregroundStyle(LibraryTheme.title)
 
-            Text(hasActiveFilters ? "试试切换地点或清空搜索。" : "点右下角的“添加”，先录入第一本书。")
+            Text(hasActiveFilters ? "试试切换地点或清空搜索。" : "点右上角的加号，先录入第一本书。")
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(LibraryTheme.secondaryText)
                 .multilineTextAlignment(.center)
@@ -372,32 +373,16 @@ struct ContentView: View {
     }
 
     private var addBookButton: some View {
-        Button {
+        headerActionButton(
+            systemName: "plus",
+            identifier: "addBookButton",
+            fill: LibraryTheme.accent,
+            foreground: .white,
+            stroke: LibraryTheme.accent
+        ) {
             editorTarget = .create(defaultLocationID: store.defaultLocationID)
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "plus")
-                    .font(.system(size: 18, weight: .bold))
-
-                Text("添加")
-                    .font(.system(size: 17, weight: .semibold))
-            }
-            .padding(.horizontal, 20)
-            .frame(height: 56)
-                .foregroundStyle(store.hasRepository ? Color.white : LibraryTheme.secondaryText)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(store.hasRepository ? LibraryTheme.accent : LibraryTheme.surfaceSecondary)
-                )
-                .shadow(
-                    color: store.hasRepository ? LibraryTheme.accent.opacity(0.16) : Color.black.opacity(0.04),
-                    radius: 12,
-                    x: 0,
-                    y: 6
-                )
         }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("addBookButton")
+        .accessibilityLabel("添加")
         .disabled(!store.hasRepository)
     }
 

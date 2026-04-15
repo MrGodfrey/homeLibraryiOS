@@ -24,7 +24,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		88809B3C2F8DE22D0057725A /* homeLibrary.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = homeLibrary.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		88809B3C2F8DE22D0057725A /* 家藏万卷.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "家藏万卷.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		88809B4D2F8DE22F0057725A /* homeLibraryTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = homeLibraryTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		88809B572F8DE22F0057725A /* homeLibraryUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = homeLibraryUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -101,7 +101,7 @@
 		88809B3D2F8DE22D0057725A /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				88809B3C2F8DE22D0057725A /* homeLibrary.app */,
+				88809B3C2F8DE22D0057725A /* 家藏万卷.app */,
 				88809B4D2F8DE22F0057725A /* homeLibraryTests.xctest */,
 				88809B572F8DE22F0057725A /* homeLibraryUITests.xctest */,
 			);
@@ -130,7 +130,7 @@
 			packageProductDependencies = (
 			);
 			productName = homeLibrary;
-			productReference = 88809B3C2F8DE22D0057725A /* homeLibrary.app */;
+			productReference = 88809B3C2F8DE22D0057725A /* 家藏万卷.app */;
 			productType = "com.apple.product-type.application";
 		};
 		88809B4C2F8DE22F0057725A /* homeLibraryTests */ = {
@@ -295,6 +295,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_ENTITLEMENTS = homeLibrary/homeLibrary.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -321,7 +322,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.3;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = yu.homeLibrary;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = "家藏万卷";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -341,6 +342,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_ENTITLEMENTS = homeLibrary/homeLibrary.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -367,7 +369,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.3;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = yu.homeLibrary;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = "家藏万卷";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;

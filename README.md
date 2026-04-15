@@ -4,6 +4,146 @@
 
 它的核心目标不是“把书存进 CloudKit”这么简单，而是让一个家庭围绕同一套书库长期使用：主人维护仓库，家庭成员通过 iCloud 标准共享加入；首页专注浏览与查找；仓库设置页承接迁移、地点配置、清空、导出和共享管理。
 
+## 0. 当前项目实际补充
+
+下面的 `1` 到 `7` 节需求文档已经恢复保留。这一节只补当前代码已经落地的实现信息，方便把 README 和仓库现状对齐；如果和后文需求表述有细微出入，以当前代码实现为准。
+
+### 0.1 当前已实现的功能
+
+- 创建自有仓库，默认初始化 `成都`、`重庆` 两个地点
+- 浏览当前仓库书籍，支持搜索、地点筛选、下拉刷新
+- 新增、编辑、删除书籍
+- 从相册选择或替换封面
+- 在仓库设置里管理地点：新增、删除、排序、控制是否显示在首页筛选
+- 查看并切换当前设备可访问的仓库
+- owner 通过系统 `UICloudSharingController` 邀请家人加入
+- member 通过系统回调或手动粘贴 iCloud 分享链接加入共享仓库
+- 通过仓库设置页导入旧 JSON 包
+- 导出当前仓库为 ZIP，包内只有一个 `LibraryImport.json`
+- 清空当前仓库
+- 本地缓存当前仓库快照和封面，并恢复上次选中的仓库
+
+### 0.2 当前项目形态
+
+- SwiftUI iOS 应用
+- 目标设备：iPhone（`TARGETED_DEVICE_FAMILY = 1`）
+- Deployment target：`iOS 26.4`
+- Scheme：`homeLibrary`
+- Bundle ID：`yu.homeLibrary`
+- CloudKit container：`iCloud.yu.homeLibrary`
+
+当前默认后端是 CloudKit；测试默认切到内存后端。
+
+### 0.3 当前 UI 和数据模型补充
+
+当前代码里，一个家庭书库对应一个 CloudKit 自定义 zone：
+
+- owner 从 `privateCloudDatabase` 访问
+- member 从 `sharedCloudDatabase` 访问
+- zone 根记录类型：`LibraryRepository`
+- 书籍记录类型：`LibraryBook`
+- 地点记录类型：`LibraryLocation`
+
+地点已经不是写死枚举。代码仍然保留 `成都` / `重庆` 作为默认地点，但每个仓库都可以独立修改地点列表和首页筛选可见性。
+
+书籍当前 UI 可编辑的字段是：
+
+- 书名
+- 作者
+- 出版社
+- 出版年份
+- 所在地点
+- 封面
+
+导入数据里的 `customFields` 仍会保留，搜索时也会参与匹配，但当前 UI 没有单独的自定义字段编辑入口。
+
+### 0.4 本地运行
+
+1. 用 Xcode 打开 [homeLibrary.xcodeproj](homeLibrary.xcodeproj)
+2. 选择 `homeLibrary` scheme
+3. 直接运行到 iPhone 模拟器或真机
+
+如果只是想调 UI，不想依赖 iCloud / CloudKit，可以给运行 Scheme 加环境变量：
+
+```text
+HOME_LIBRARY_REMOTE_DRIVER=memory
+```
+
+这时仓库、图书和地点都走内存后端，分享相关能力不会启用。
+
+### 0.5 常用环境变量
+
+| 变量 | 作用 |
+| --- | --- |
+| `HOME_LIBRARY_REMOTE_DRIVER` | 后端实现，`cloudkit` 或 `memory` |
+| `HOME_LIBRARY_STORAGE_ROOT` | 覆盖本地存储根目录 |
+| `HOME_LIBRARY_STORAGE_NAMESPACE` | 隔离本地缓存命名空间 |
+| `HOME_LIBRARY_SESSION_NAMESPACE` | 隔离当前仓库会话命名空间 |
+| `HOME_LIBRARY_CLOUDKIT_CONTAINER` | 覆盖 CloudKit container |
+| `HOME_LIBRARY_PREFERRED_REPOSITORY_NAME` | 创建 owner 仓库时的默认名称 |
+| `HOME_LIBRARY_DEBUG_CLOUDKIT` | 输出更多 CloudKit 调试日志 |
+| `HOME_LIBRARY_CLOUDKIT_LIVE_TESTS` | 显式开启真实 CloudKit 集成测试 |
+
+测试运行器注入环境变量时，代码也兼容 `TEST_RUNNER_` 前缀。
+
+### 0.6 导入与导出
+
+仓库设置页当前通过文件选择器导入单个 `.json` 文件，兼容：
+
+- 旧版 `books.json`
+- `LibraryImport.json`
+- `SeedBooks.json`
+- 旧格式书籍数组 JSON
+
+底层导入器还保留了对这些输入的兼容逻辑，主要用于测试和历史迁移：
+
+- 结构化旧目录：`books/`、`covers/`、`deletions/`
+
+导出入口在仓库设置页，输出为 ZIP 文件，压缩包里只有一个 `LibraryImport.json`。封面会内嵌在导出内容里。
+
+### 0.7 测试入口
+
+仓库当前包含三类测试：
+
+- `homeLibraryTests/`：业务逻辑、配置切换、仓库流程、导入导出、持久化
+- `homeLibraryUITests/`：最基本的建库、加书、搜索主流程
+- `homeLibraryTests/CloudKitLiveIntegrationTests.swift`：显式开启时运行的真实 CloudKit 集成测试
+
+默认单测和 UI 测试都使用内存后端。直接在 Xcode 里跑 `Test` 即可。
+
+命令行示例：
+
+```bash
+xcodebuild test \
+  -project homeLibrary.xcodeproj \
+  -scheme homeLibrary \
+  -destination 'platform=iOS Simulator,name=iPhone 17'
+```
+
+如果要跑真实 CloudKit 集成测试，需要额外注入：
+
+```text
+HOME_LIBRARY_REMOTE_DRIVER=cloudkit
+HOME_LIBRARY_CLOUDKIT_LIVE_TESTS=1
+HOME_LIBRARY_STORAGE_NAMESPACE=cloudkit-live-tests
+```
+
+另外，仓库里还有一个双模拟器共享验证脚本：
+
+- [scripts/run_dual_sim_cloudkit_share_test.swift](scripts/run_dual_sim_cloudkit_share_test.swift)
+
+它用于验证 owner / member 两端的 CloudKit 共享、写入、同步和清理流程，不属于默认 XCTest 用例。
+
+### 0.8 相关文件
+
+- [homeLibrary/ContentView.swift](homeLibrary/ContentView.swift)：主界面
+- [homeLibrary/RepositoryManagementView.swift](homeLibrary/RepositoryManagementView.swift)：仓库设置、地点管理、共享、导入导出
+- [homeLibrary/LibraryStore.swift](homeLibrary/LibraryStore.swift)：状态管理和主要业务流程
+- [homeLibrary/LibrarySync.swift](homeLibrary/LibrarySync.swift)：CloudKit / 内存后端
+- [homeLibrary/LibraryPersistence.swift](homeLibrary/LibraryPersistence.swift)：缓存、导入器、ZIP 导出
+- [TEST.md](TEST.md)：测试覆盖说明
+- [scripts/import_from_cloudflare.mjs](scripts/import_from_cloudflare.mjs)：旧 Cloudflare 数据转换脚本
+
 ## 1. 设计方式
 
 - 需求先于实现  

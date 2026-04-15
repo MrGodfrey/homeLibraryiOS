@@ -155,3 +155,16 @@
 - `Build iOS Apps / test_sim -only-testing:homeLibraryUITests` 通过，`2` 个 UI 测试通过
 - `Build iOS Apps / test_sim -only-testing:homeLibraryTests` 通过，`20` 个测试中 `19` 个通过、`1` 个 live 测试按预期跳过
 - 暗黑模式下手动检查首页与仓库设置页，动态主题已生效
+
+## 2026-04-15（首页添加按钮挪到右上角）
+
+- 调整首页顶部操作区：移除右下角悬浮“添加”按钮，改为放到右上角并位于“设置”左侧。
+- 收敛添加入口样式：顶部“添加”改为与设置按钮同尺寸的方形操作按钮，使用绿色底色和白色加号。
+- 同步更新首页空态文案：引导文字改为提示用户点击右上角加号录入第一本书。
+- 保持暗黑模式适配：添加按钮继续复用 `LibraryTheme.accent` 的动态绿色，暗色界面下与现有顶部控件保持同一套主题。
+
+### 验证记录
+
+- `Build iOS Apps / build_sim` 通过
+- iPhone 17 模拟器启动后通过辅助树确认 `addBookButton` 位于 `repositoryManagementButton` 左侧，且两者尺寸一致
+- 暗黑模式下手动截图确认首页顶部绿色添加按钮、白色加号和整体对比度正常
