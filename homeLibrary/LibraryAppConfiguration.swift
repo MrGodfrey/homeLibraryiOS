@@ -7,6 +7,27 @@
 
 import Foundation
 
+enum LibraryEnvironment {
+    nonisolated(unsafe) private static let testRunnerPrefix = "TEST_RUNNER_"
+
+    nonisolated static func resolved(_ environment: [String: String]) -> [String: String] {
+        var resolvedEnvironment = environment
+
+        for (key, value) in environment where key.hasPrefix(testRunnerPrefix) {
+            let strippedKey = String(key.dropFirst(testRunnerPrefix.count))
+            if resolvedEnvironment[strippedKey] == nil {
+                resolvedEnvironment[strippedKey] = value
+            }
+        }
+
+        return resolvedEnvironment
+    }
+
+    nonisolated static func value(for key: String, in environment: [String: String]) -> String? {
+        environment[key] ?? environment["\(testRunnerPrefix)\(key)"]
+    }
+}
+
 struct LibraryAppConfiguration {
     static let defaultCloudContainerIdentifier = "iCloud.yu.homeLibrary"
 
@@ -20,6 +41,7 @@ struct LibraryAppConfiguration {
         bundle: Bundle = .main,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> LibraryAppConfiguration {
+        let environment = LibraryEnvironment.resolved(environment)
         let defaultRoot = defaultApplicationSupportDirectory().appendingPathComponent("homeLibrary", isDirectory: true)
         let storageNamespace = environment["HOME_LIBRARY_STORAGE_NAMESPACE"]?.nilIfEmpty
 
@@ -55,12 +77,22 @@ struct LibraryAppConfiguration {
         environment: [String: String],
         containerIdentifier: String?
     ) -> any LibraryRemoteSyncing {
+        if environment["HOME_LIBRARY_REMOTE_DRIVER"]?.lowercased() == "cloudkit" {
+            return CloudKitLibraryService(
+                containerIdentifier: containerIdentifier,
+                environment: environment
+            )
+        }
+
         if environment["HOME_LIBRARY_REMOTE_DRIVER"]?.lowercased() == "memory" ||
             environment["XCTestConfigurationFilePath"] != nil {
             return InMemoryLibraryRemoteService()
         }
 
-        return CloudKitLibraryService(containerIdentifier: containerIdentifier)
+        return CloudKitLibraryService(
+            containerIdentifier: containerIdentifier,
+            environment: environment
+        )
     }
 
     private static func defaultApplicationSupportDirectory() -> URL {

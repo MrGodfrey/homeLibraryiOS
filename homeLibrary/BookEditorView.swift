@@ -11,7 +11,8 @@ import SwiftUI
 struct BookEditorView: View {
     let editingBook: Book?
     let initialCoverData: Data?
-    let defaultLocation: BookLocation
+    let locations: [LibraryLocation]
+    let defaultLocationID: String
     let onSave: (BookDraft, Book?) async -> Bool
 
     @Environment(\.dismiss) private var dismiss
@@ -24,14 +25,20 @@ struct BookEditorView: View {
     init(
         editingBook: Book?,
         initialCoverData: Data?,
-        defaultLocation: BookLocation,
+        locations: [LibraryLocation],
+        defaultLocationID: String,
         onSave: @escaping (BookDraft, Book?) async -> Bool
     ) {
         self.editingBook = editingBook
         self.initialCoverData = initialCoverData
-        self.defaultLocation = defaultLocation
+        self.locations = locations
+        self.defaultLocationID = defaultLocationID
         self.onSave = onSave
-        _draft = State(initialValue: BookDraft(book: editingBook, coverData: initialCoverData, defaultLocation: defaultLocation))
+        _draft = State(initialValue: BookDraft(
+            book: editingBook,
+            coverData: initialCoverData,
+            defaultLocationID: defaultLocationID
+        ))
     }
 
     var body: some View {
@@ -89,16 +96,12 @@ struct BookEditorView: View {
                 .keyboardType(.numbersAndPunctuation)
                 .accessibilityIdentifier("yearField")
 
-            Picker("所在地", selection: $draft.location) {
-                ForEach(BookLocation.allCases) { location in
-                    Text(location.rawValue).tag(location)
+            Picker("所在地点", selection: $draft.locationID) {
+                ForEach(locations) { location in
+                    Text(location.name).tag(location.id)
                 }
             }
             .accessibilityIdentifier("editorLocationPicker")
-
-            Text("当前版本只保留手动录入。书名、作者、出版社、年份和封面都请直接在 iPhone 上维护。")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
         }
     }
 

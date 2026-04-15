@@ -8,6 +8,8 @@
 import CloudKit
 import CryptoKit
 import Foundation
+import OSLog
+import UIKit
 
 nonisolated enum LibrarySyncStatus: Equatable {
     case idle
@@ -48,37 +50,26 @@ nonisolated enum LibrarySyncStatus: Equatable {
     }()
 }
 
-nonisolated struct RepositoryDescriptor: Sendable {
-    let id: String
-    let name: String
-    let ownerProfileID: String
-    let accessAccount: String
-}
-
-nonisolated struct RepositoryBootstrapResult: Sendable {
-    let descriptor: RepositoryDescriptor
-    let credentials: RepositoryCredentials
-}
-
 nonisolated struct RemoteBookSnapshot: Sendable {
     let book: Book
     let coverData: Data?
 }
 
 protocol LibraryRemoteSyncing {
-    func fetchOwnedRepository(ownerProfileID: String) async throws -> RepositoryDescriptor?
-    func createOwnedRepository(ownerProfileID: String, preferredName: String) async throws -> RepositoryBootstrapResult
-    func fetchRepository(id: String) async throws -> RepositoryDescriptor
-    func joinRepository(account: String, password: String) async throws -> RepositoryDescriptor
-    func rotateCredentials(for repositoryID: String, ownerProfileID: String) async throws -> RepositoryCredentials
-    func fetchBooks(in repositoryID: String) async throws -> [RemoteBookSnapshot]
-    func upsertBook(_ book: Book, coverData: Data?, in repositoryID: String) async throws -> RemoteBookSnapshot
-    func deleteBook(id: String, deletedAt: Date, in repositoryID: String) async throws
+    func listRepositories() async throws -> [LibraryRepositoryReference]
+    func createOwnedRepository(preferredName: String) async throws -> LibraryRepositoryReference
+    func refreshRepository(_ repository: LibraryRepositoryReference) async throws -> RemoteRepositorySnapshot
+    func saveLocations(_ locations: [LibraryLocation], in repository: LibraryRepositoryReference) async throws -> [LibraryLocation]
+    func upsertBook(_ book: Book, coverData: Data?, in repository: LibraryRepositoryReference) async throws -> RemoteBookSnapshot
+    func deleteBook(id: String, deletedAt: Date, in repository: LibraryRepositoryReference) async throws
+    func clearRepository(_ repository: LibraryRepositoryReference, resetLocations: [LibraryLocation]) async throws
+    func exportRepository(_ repository: LibraryRepositoryReference) async throws -> LibraryImportPackage
+    func deleteRepository(_ repository: LibraryRepositoryReference) async throws
 }
 
 enum LibraryRemoteServiceError: LocalizedError {
     case repositoryNotFound
-    case invalidRepositoryCredentials
+    case shareNotAvailable
     case noCloudAccount
     case permissionDenied
     case invalidCloudRecord
@@ -93,9 +84,9 @@ enum LibraryRemoteServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .repositoryNotFound:
-            return "没有找到对应的共享仓库。"
-        case .invalidRepositoryCredentials:
-            return "仓库账号或密码不正确。"
+            return "没有找到对应的家庭书库。"
+        case .shareNotAvailable:
+            return "当前书库还没有可用的共享。"
         case .noCloudAccount:
             return "当前设备没有可用的 iCloud 账号，无法连接 CloudKit。"
         case .permissionDenied:
@@ -130,118 +121,87 @@ enum LibraryRemoteServiceError: LocalizedError {
 
 actor InMemoryLibraryRemoteService: LibraryRemoteSyncing {
     private struct StoredRepository: Sendable {
-        var descriptor: RepositoryDescriptor
-        var credentials: RepositoryCredentials
+        var repository: LibraryRepositoryReference
+        var locations: [LibraryLocation]
+        var snapshotsByBookID: [String: RemoteBookSnapshot]
     }
 
     private var repositoriesByID: [String: StoredRepository] = [:]
-    private var repositoryIDsByOwnerProfileID: [String: String] = [:]
-    private var snapshotsByRepositoryID: [String: [String: RemoteBookSnapshot]] = [:]
 
-    func fetchOwnedRepository(ownerProfileID: String) async throws -> RepositoryDescriptor? {
-        guard let repositoryID = repositoryIDsByOwnerProfileID[ownerProfileID],
-              let repository = repositoriesByID[repositoryID] else {
-            return nil
-        }
-
-        return repository.descriptor
-    }
-
-    func createOwnedRepository(ownerProfileID: String, preferredName: String) async throws -> RepositoryBootstrapResult {
-        if let repositoryID = repositoryIDsByOwnerProfileID[ownerProfileID],
-           let repository = repositoriesByID[repositoryID] {
-            return RepositoryBootstrapResult(
-                descriptor: repository.descriptor,
-                credentials: repository.credentials
-            )
-        }
-
-        let credentials = Self.generateCredentials()
-        let descriptor = RepositoryDescriptor(
-            id: Self.makeRepositoryID(),
-            name: preferredName,
-            ownerProfileID: ownerProfileID,
-            accessAccount: credentials.account
-        )
-        let repository = StoredRepository(descriptor: descriptor, credentials: credentials)
-
-        repositoriesByID[descriptor.id] = repository
-        repositoryIDsByOwnerProfileID[ownerProfileID] = descriptor.id
-        snapshotsByRepositoryID[descriptor.id] = [:]
-
-        return RepositoryBootstrapResult(descriptor: descriptor, credentials: credentials)
-    }
-
-    func fetchRepository(id: String) async throws -> RepositoryDescriptor {
-        guard let repository = repositoriesByID[id] else {
-            throw LibraryRemoteServiceError.repositoryNotFound
-        }
-
-        return repository.descriptor
-    }
-
-    func joinRepository(account: String, password: String) async throws -> RepositoryDescriptor {
-        let normalizedAccount = account.trimmed
-        let normalizedPassword = password.trimmed
-
-        guard !normalizedAccount.isEmpty, !normalizedPassword.isEmpty else {
-            throw LibraryRemoteServiceError.invalidRepositoryCredentials
-        }
-
-        guard let repository = repositoriesByID.values.first(where: { storedRepository in
-            storedRepository.credentials.account == normalizedAccount &&
-                storedRepository.credentials.password == normalizedPassword
-        }) else {
-            throw LibraryRemoteServiceError.invalidRepositoryCredentials
-        }
-
-        return repository.descriptor
-    }
-
-    func rotateCredentials(for repositoryID: String, ownerProfileID: String) async throws -> RepositoryCredentials {
-        guard var repository = repositoriesByID[repositoryID] else {
-            throw LibraryRemoteServiceError.repositoryNotFound
-        }
-
-        guard repository.descriptor.ownerProfileID == ownerProfileID else {
-            throw LibraryRemoteServiceError.permissionDenied
-        }
-
-        let credentials = Self.generateCredentials()
-        repository.credentials = credentials
-        repository.descriptor = RepositoryDescriptor(
-            id: repository.descriptor.id,
-            name: repository.descriptor.name,
-            ownerProfileID: repository.descriptor.ownerProfileID,
-            accessAccount: credentials.account
-        )
-        repositoriesByID[repositoryID] = repository
-        return credentials
-    }
-
-    func fetchBooks(in repositoryID: String) async throws -> [RemoteBookSnapshot] {
-        guard repositoriesByID[repositoryID] != nil else {
-            throw LibraryRemoteServiceError.repositoryNotFound
-        }
-
-        return snapshotsByRepositoryID[repositoryID, default: [:]]
-            .values
+    func listRepositories() async throws -> [LibraryRepositoryReference] {
+        repositoriesByID.values
+            .map(\.repository)
             .sorted { left, right in
+                if left.role != right.role {
+                    return left.role == .owner
+                }
+
+                return left.name.localizedStandardCompare(right.name) == .orderedAscending
+            }
+    }
+
+    func createOwnedRepository(preferredName: String) async throws -> LibraryRepositoryReference {
+        let repository = LibraryRepositoryReference(
+            id: "repo.\(UUID().uuidString)",
+            name: preferredName,
+            role: .owner,
+            databaseScope: .private,
+            zoneName: "memory.\(UUID().uuidString)",
+            zoneOwnerName: CKCurrentUserDefaultName,
+            shareRecordName: nil,
+            shareStatus: .notShared
+        )
+
+        repositoriesByID[repository.id] = StoredRepository(
+            repository: repository,
+            locations: LibraryLocation.defaultLocations(),
+            snapshotsByBookID: [:]
+        )
+
+        return repository
+    }
+
+    func refreshRepository(_ repository: LibraryRepositoryReference) async throws -> RemoteRepositorySnapshot {
+        guard let storedRepository = repositoriesByID[repository.id] else {
+            throw LibraryRemoteServiceError.repositoryNotFound
+        }
+
+        return RemoteRepositorySnapshot(
+            repository: storedRepository.repository,
+            locations: storedRepository.locations.sorted(by: { $0.sortOrder < $1.sortOrder }),
+            books: storedRepository.snapshotsByBookID.values.sorted { left, right in
                 if left.book.updatedAt != right.book.updatedAt {
                     return left.book.updatedAt > right.book.updatedAt
                 }
 
                 return left.book.createdAt > right.book.createdAt
             }
+        )
     }
 
-    func upsertBook(_ book: Book, coverData: Data?, in repositoryID: String) async throws -> RemoteBookSnapshot {
-        guard repositoriesByID[repositoryID] != nil else {
+    func saveLocations(_ locations: [LibraryLocation], in repository: LibraryRepositoryReference) async throws -> [LibraryLocation] {
+        guard var storedRepository = repositoriesByID[repository.id] else {
             throw LibraryRemoteServiceError.repositoryNotFound
         }
 
-        let currentSnapshots = snapshotsByRepositoryID[repositoryID, default: [:]]
-        let existingSnapshot = currentSnapshots[book.id]
+        let normalizedLocations = locations
+            .sorted(by: { $0.sortOrder < $1.sortOrder })
+            .enumerated()
+            .map { index, location in
+                LibraryLocation(id: location.id, name: location.name, sortOrder: index, isVisible: location.isVisible)
+            }
+
+        storedRepository.locations = normalizedLocations
+        repositoriesByID[repository.id] = storedRepository
+        return normalizedLocations
+    }
+
+    func upsertBook(_ book: Book, coverData: Data?, in repository: LibraryRepositoryReference) async throws -> RemoteBookSnapshot {
+        guard var storedRepository = repositoriesByID[repository.id] else {
+            throw LibraryRemoteServiceError.repositoryNotFound
+        }
+
+        let existingSnapshot = storedRepository.snapshotsByBookID[book.id]
         let storedCoverAssetID = coverData.map(Self.makeCoverAssetID(from:)) ??
             book.coverAssetID ??
             existingSnapshot?.book.coverAssetID
@@ -259,42 +219,52 @@ actor InMemoryLibraryRemoteService: LibraryRemoteSyncing {
         storedBook.coverAssetID = storedCoverAssetID
 
         let snapshot = RemoteBookSnapshot(book: storedBook, coverData: storedCoverData)
-        snapshotsByRepositoryID[repositoryID, default: [:]][book.id] = snapshot
+        storedRepository.snapshotsByBookID[book.id] = snapshot
+        repositoriesByID[repository.id] = storedRepository
         return snapshot
     }
 
-    func deleteBook(id: String, deletedAt: Date, in repositoryID: String) async throws {
-        guard repositoriesByID[repositoryID] != nil else {
+    func deleteBook(id: String, deletedAt: Date, in repository: LibraryRepositoryReference) async throws {
+        guard var storedRepository = repositoriesByID[repository.id] else {
             throw LibraryRemoteServiceError.repositoryNotFound
         }
 
         _ = deletedAt
-        snapshotsByRepositoryID[repositoryID, default: [:]][id] = nil
+        storedRepository.snapshotsByBookID[id] = nil
+        repositoriesByID[repository.id] = storedRepository
     }
 
-    nonisolated private static func generateCredentials() -> RepositoryCredentials {
-        RepositoryCredentials(
-            account: "HL\(makeRandomCode(length: 8))",
-            password: makeRandomPassword()
+    func clearRepository(_ repository: LibraryRepositoryReference, resetLocations: [LibraryLocation]) async throws {
+        guard var storedRepository = repositoriesByID[repository.id] else {
+            throw LibraryRemoteServiceError.repositoryNotFound
+        }
+
+        storedRepository.snapshotsByBookID = [:]
+        storedRepository.locations = resetLocations
+        repositoriesByID[repository.id] = storedRepository
+    }
+
+    func exportRepository(_ repository: LibraryRepositoryReference) async throws -> LibraryImportPackage {
+        guard let storedRepository = repositoriesByID[repository.id] else {
+            throw LibraryRemoteServiceError.repositoryNotFound
+        }
+
+        let locationsByID = Dictionary(uniqueKeysWithValues: storedRepository.locations.map { ($0.id, $0) })
+        let books = storedRepository.snapshotsByBookID.values
+            .map { LibraryImportBook(book: $0.book, coverData: $0.coverData, locationsByID: locationsByID) }
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+
+        return LibraryImportPackage(
+            schemaVersion: LibraryImportPackage.currentSchemaVersion,
+            source: "memory",
+            exportedAt: .now,
+            locations: storedRepository.locations.map(LibraryImportLocation.init(location:)),
+            books: books
         )
     }
 
-    nonisolated private static func makeRandomPassword() -> String {
-        [
-            makeRandomCode(length: 4),
-            makeRandomCode(length: 4),
-            makeRandomCode(length: 4)
-        ]
-        .joined(separator: "-")
-    }
-
-    nonisolated private static func makeRandomCode(length: Int) -> String {
-        let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
-        return String((0..<length).compactMap { _ in alphabet.randomElement() })
-    }
-
-    nonisolated private static func makeRepositoryID() -> String {
-        "repo.\(UUID().uuidString)"
+    func deleteRepository(_ repository: LibraryRepositoryReference) async throws {
+        repositoriesByID[repository.id] = nil
     }
 
     nonisolated private static func makeCoverAssetID(from data: Data) -> String {
@@ -304,210 +274,180 @@ actor InMemoryLibraryRemoteService: LibraryRemoteSyncing {
     }
 }
 
-actor CloudKitLibraryService: LibraryRemoteSyncing {
+final class CloudKitLibraryService: NSObject, LibraryRemoteSyncing {
     private enum RecordType {
-        static let repository = "LibraryRepository"
-        static let book = "LibraryBook"
+        nonisolated(unsafe) static let repository = "LibraryRepository"
+        nonisolated(unsafe) static let book = "LibraryBook"
+        nonisolated(unsafe) static let location = "LibraryLocation"
     }
 
     private enum RepositoryField {
-        static let name = "name"
-        static let ownerProfileID = "ownerProfileID"
-        static let accessAccount = "accessAccount"
-        static let passwordSalt = "passwordSalt"
-        static let passwordHash = "passwordHash"
-        static let schemaVersion = "schemaVersion"
-        static let createdAt = "createdAt"
-        static let updatedAt = "updatedAt"
+        nonisolated(unsafe) static let name = "name"
+        nonisolated(unsafe) static let schemaVersion = "schemaVersion"
+        nonisolated(unsafe) static let createdAt = "createdAt"
+        nonisolated(unsafe) static let updatedAt = "updatedAt"
+    }
+
+    private enum LocationField {
+        nonisolated(unsafe) static let name = "name"
+        nonisolated(unsafe) static let sortOrder = "sortOrder"
+        nonisolated(unsafe) static let isVisible = "isVisible"
     }
 
     private enum BookField {
-        static let repositoryID = "repositoryID"
-        static let title = "title"
-        static let author = "author"
-        static let location = "location"
-        static let payload = "payload"
-        static let coverAssetID = "coverAssetID"
-        static let coverAsset = "coverAsset"
-        static let schemaVersion = "schemaVersion"
-        static let createdAt = "createdAt"
-        static let updatedAt = "updatedAt"
-        static let deletedAt = "deletedAt"
+        nonisolated(unsafe) static let title = "title"
+        nonisolated(unsafe) static let author = "author"
+        nonisolated(unsafe) static let locationID = "locationID"
+        nonisolated(unsafe) static let payload = "payload"
+        nonisolated(unsafe) static let coverAssetID = "coverAssetID"
+        nonisolated(unsafe) static let coverAsset = "coverAsset"
+        nonisolated(unsafe) static let schemaVersion = "schemaVersion"
+        nonisolated(unsafe) static let createdAt = "createdAt"
+        nonisolated(unsafe) static let updatedAt = "updatedAt"
+    }
+
+    private enum RecordName {
+        nonisolated(unsafe) static let repository = "repository"
+        nonisolated static func location(_ id: String) -> String { "location.\(id)" }
+        nonisolated static func book(_ id: String) -> String { "book.\(id)" }
     }
 
     private let container: CKContainer
-    private let database: CKDatabase
+    private let privateDatabase: CKDatabase
+    private let sharedDatabase: CKDatabase
+    private let liveTestZonePrefix: String
+    private let logger = Logger(subsystem: "yu.homeLibrary", category: "CloudKit")
     private var hasValidatedCloudAccount = false
-    private var cachedCurrentUserRecordID: CKRecord.ID?
-    private let maxRetryAttempts = 2
 
-    init(containerIdentifier: String?) {
+    init(
+        containerIdentifier: String?,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) {
+        let environment = LibraryEnvironment.resolved(environment)
+
         if let containerIdentifier, !containerIdentifier.isEmpty {
             container = CKContainer(identifier: containerIdentifier)
         } else {
             container = CKContainer.default()
         }
 
-        database = container.publicCloudDatabase
+        privateDatabase = container.privateCloudDatabase
+        sharedDatabase = container.sharedCloudDatabase
+        liveTestZonePrefix = environment["HOME_LIBRARY_CLOUDKIT_LIVE_TESTS"] == "1" ? "library.live-test." : "library."
+        super.init()
     }
 
-    func fetchOwnedRepository(ownerProfileID: String) async throws -> RepositoryDescriptor? {
+    func listRepositories() async throws -> [LibraryRepositoryReference] {
         try await ensureCloudAccountAvailable()
 
-        let currentUserRecordID = try await currentUserRecordID()
-        let records = try await performUnfilteredQuery(recordType: RecordType.repository)
-            .filter { record in
-                record.creatorUserRecordID?.recordName == currentUserRecordID.recordName
+        let ownedRepositories = try await fetchRepositories(in: privateDatabase, scope: .private, role: .owner)
+        let sharedRepositories = try await fetchRepositories(in: sharedDatabase, scope: .shared, role: .member)
+
+        return (ownedRepositories + sharedRepositories).sorted { left, right in
+            if left.role != right.role {
+                return left.role == .owner
             }
-        guard !records.isEmpty else {
-            return nil
-        }
 
-        let selectedRecord = Self.selectOwnedRepository(from: records, preferredOwnerProfileID: ownerProfileID)
-        return try Self.makeRepositoryDescriptor(from: selectedRecord)
+            return left.name.localizedStandardCompare(right.name) == .orderedAscending
+        }
     }
 
-    func createOwnedRepository(ownerProfileID: String, preferredName: String) async throws -> RepositoryBootstrapResult {
+    func createOwnedRepository(preferredName: String) async throws -> LibraryRepositoryReference {
         try await ensureCloudAccountAvailable()
 
-        let credentials = Self.generateCredentials()
-        let passwordSalt = Self.makeSalt()
-        let passwordHash = Self.makePasswordHash(password: credentials.password, salt: passwordSalt)
-        let repositoryID = Self.makeRepositoryID()
+        let zoneID = CKRecordZone.ID(zoneName: makeZoneName(), ownerName: CKCurrentUserDefaultName)
+        let zone = CKRecordZone(zoneID: zoneID)
+        _ = try await privateDatabase.modifyRecordZones(saving: [zone], deleting: [])
+
         let now = Date()
+        let repositoryRecord = CKRecord(recordType: RecordType.repository, recordID: CKRecord.ID(recordName: RecordName.repository, zoneID: zoneID))
+        repositoryRecord[RepositoryField.name] = preferredName as CKRecordValue
+        repositoryRecord[RepositoryField.schemaVersion] = Int64(LibraryImportPackage.currentSchemaVersion) as CKRecordValue
+        repositoryRecord[RepositoryField.createdAt] = now as CKRecordValue
+        repositoryRecord[RepositoryField.updatedAt] = now as CKRecordValue
 
-        let record = CKRecord(recordType: RecordType.repository, recordID: CKRecord.ID(recordName: repositoryID))
-        record[RepositoryField.name] = preferredName as CKRecordValue
-        record[RepositoryField.ownerProfileID] = ownerProfileID as CKRecordValue
-        record[RepositoryField.accessAccount] = credentials.account as CKRecordValue
-        record[RepositoryField.passwordSalt] = passwordSalt as CKRecordValue
-        record[RepositoryField.passwordHash] = passwordHash as CKRecordValue
-        record[RepositoryField.schemaVersion] = Int64(BookPayload.currentSchemaVersion) as CKRecordValue
-        record[RepositoryField.createdAt] = now as CKRecordValue
-        record[RepositoryField.updatedAt] = now as CKRecordValue
+        let locationRecords = LibraryLocation.defaultLocations().map { makeLocationRecord(for: $0, zoneID: zoneID) }
+        _ = try await saveRecords([repositoryRecord] + locationRecords, in: privateDatabase, operationName: "createOwnedRepository", zoneID: zoneID)
 
-        _ = try await save(record)
-
-        let descriptor = RepositoryDescriptor(
-            id: repositoryID,
+        return LibraryRepositoryReference(
+            id: zoneID.zoneName,
             name: preferredName,
-            ownerProfileID: ownerProfileID,
-            accessAccount: credentials.account
+            role: .owner,
+            databaseScope: .private,
+            zoneName: zoneID.zoneName,
+            zoneOwnerName: zoneID.ownerName,
+            shareRecordName: nil,
+            shareStatus: .notShared
         )
-
-        return RepositoryBootstrapResult(descriptor: descriptor, credentials: credentials)
     }
 
-    func fetchRepository(id: String) async throws -> RepositoryDescriptor {
+    func refreshRepository(_ repository: LibraryRepositoryReference) async throws -> RemoteRepositorySnapshot {
         try await ensureCloudAccountAvailable()
-        let record = try await fetchRecord(recordID: CKRecord.ID(recordName: id))
-        return try Self.makeRepositoryDescriptor(from: record)
-    }
+        let database = database(for: repository.databaseScope)
+        let zoneID = repository.zoneID
 
-    func joinRepository(account: String, password: String) async throws -> RepositoryDescriptor {
-        try await ensureCloudAccountAvailable()
+        let repositoryRecord = try await fetchRecord(
+            recordID: CKRecord.ID(recordName: RecordName.repository, zoneID: zoneID),
+            in: database,
+            operationName: "refreshRepository.repository"
+        )
+        let zone = try await fetchZone(zoneID: zoneID, in: database)
+        let updatedRepository = try makeRepositoryReference(from: repositoryRecord, role: repository.role, scope: repository.databaseScope, zone: zone)
+        let locationRecords = try await fetchRecords(recordType: RecordType.location, inZoneWith: zoneID, database: database, operationName: "refreshRepository.locations")
+        let bookRecords = try await fetchRecords(recordType: RecordType.book, inZoneWith: zoneID, database: database, operationName: "refreshRepository.books")
 
-        let normalizedAccount = account.trimmed
-        let normalizedPassword = password.trimmed
+        let locations = try locationRecords.map(Self.makeLocation).sorted { $0.sortOrder < $1.sortOrder }
+        let books = try bookRecords.map { try Self.makeRemoteBookSnapshot(from: $0) }
+            .sorted { left, right in
+                if left.book.updatedAt != right.book.updatedAt {
+                    return left.book.updatedAt > right.book.updatedAt
+                }
 
-        guard !normalizedAccount.isEmpty, !normalizedPassword.isEmpty else {
-            throw LibraryRemoteServiceError.invalidRepositoryCredentials
-        }
-
-        let records = try await performUnfilteredQuery(recordType: RecordType.repository)
-        guard let record = records.first(where: { ($0[RepositoryField.accessAccount] as? String) == normalizedAccount }) else {
-            throw LibraryRemoteServiceError.repositoryNotFound
-        }
-
-        let salt = try Self.requireStringField(RepositoryField.passwordSalt, in: record)
-        let expectedHash = try Self.requireStringField(RepositoryField.passwordHash, in: record)
-        let passwordHash = Self.makePasswordHash(password: normalizedPassword, salt: salt)
-
-        guard passwordHash == expectedHash else {
-            throw LibraryRemoteServiceError.invalidRepositoryCredentials
-        }
-
-        return try Self.makeRepositoryDescriptor(from: record)
-    }
-
-    func rotateCredentials(for repositoryID: String, ownerProfileID: String) async throws -> RepositoryCredentials {
-        try await ensureCloudAccountAvailable()
-
-        let recordID = CKRecord.ID(recordName: repositoryID)
-        let record = try await fetchRecord(recordID: recordID)
-        let remoteOwnerProfileID = try Self.requireStringField(RepositoryField.ownerProfileID, in: record)
-        let currentUserRecordID = try await currentUserRecordID()
-
-        guard remoteOwnerProfileID == ownerProfileID ||
-                record.creatorUserRecordID?.recordName == currentUserRecordID.recordName else {
-            throw LibraryRemoteServiceError.permissionDenied
-        }
-
-        let credentials = Self.generateCredentials()
-        let salt = Self.makeSalt()
-        let hash = Self.makePasswordHash(password: credentials.password, salt: salt)
-
-        record[RepositoryField.accessAccount] = credentials.account as CKRecordValue
-        record[RepositoryField.passwordSalt] = salt as CKRecordValue
-        record[RepositoryField.passwordHash] = hash as CKRecordValue
-        record[RepositoryField.updatedAt] = Date() as CKRecordValue
-
-        _ = try await saveRecordHandlingConflicts(record)
-        return credentials
-    }
-
-    func fetchBooks(in repositoryID: String) async throws -> [RemoteBookSnapshot] {
-        try await ensureCloudAccountAvailable()
-
-        let records = try await performUnfilteredQuery(recordType: RecordType.book)
-        var snapshots: [RemoteBookSnapshot] = []
-
-        for record in records {
-            guard (record[BookField.repositoryID] as? String) == repositoryID else {
-                continue
+                return left.book.createdAt > right.book.createdAt
             }
 
-            if record[BookField.deletedAt] != nil {
-                continue
-            }
-
-            snapshots.append(try Self.makeRemoteBookSnapshot(from: record))
-        }
-
-        return snapshots.sorted { left, right in
-            if left.book.updatedAt != right.book.updatedAt {
-                return left.book.updatedAt > right.book.updatedAt
-            }
-
-            return left.book.createdAt > right.book.createdAt
-        }
+        return RemoteRepositorySnapshot(repository: updatedRepository, locations: locations, books: books)
     }
 
-    func upsertBook(_ book: Book, coverData: Data?, in repositoryID: String) async throws -> RemoteBookSnapshot {
+    func saveLocations(_ locations: [LibraryLocation], in repository: LibraryRepositoryReference) async throws -> [LibraryLocation] {
         try await ensureCloudAccountAvailable()
+        let database = database(for: repository.databaseScope)
+        let zoneID = repository.zoneID
+        let normalizedLocations = locations
+            .sorted(by: { $0.sortOrder < $1.sortOrder })
+            .enumerated()
+            .map { index, location in
+                LibraryLocation(id: location.id, name: location.name, sortOrder: index, isVisible: location.isVisible)
+            }
 
-        let recordID = CKRecord.ID(recordName: Self.bookRecordName(repositoryID: repositoryID, bookID: book.id))
-        let existingRecord = try await fetchRecordIfPresent(recordID: recordID)
-        let record = existingRecord ?? CKRecord(recordType: RecordType.book, recordID: recordID)
+        let existingLocationRecords = try await fetchRecords(recordType: RecordType.location, inZoneWith: zoneID, database: database, operationName: "saveLocations.fetch")
+        let existingIDs = Set(existingLocationRecords.map(\.recordID.recordName))
+        let recordsToSave = normalizedLocations.map { makeLocationRecord(for: $0, zoneID: zoneID) }
+        let desiredRecordIDs = Set(recordsToSave.map(\.recordID.recordName))
+        let recordIDsToDelete = existingIDs.subtracting(desiredRecordIDs).map { CKRecord.ID(recordName: $0, zoneID: zoneID) }
 
-        let payload = book.payload
-        let payloadJSON = try Self.encodePayload(payload)
+        _ = try await saveRecords(recordsToSave, deleting: recordIDsToDelete, in: database, operationName: "saveLocations.modify", zoneID: zoneID)
+        return normalizedLocations
+    }
+
+    func upsertBook(_ book: Book, coverData: Data?, in repository: LibraryRepositoryReference) async throws -> RemoteBookSnapshot {
+        try await ensureCloudAccountAvailable()
+        let database = database(for: repository.databaseScope)
+        let zoneID = repository.zoneID
+        let recordID = CKRecord.ID(recordName: RecordName.book(book.id), zoneID: zoneID)
+        let record = try await fetchRecordIfPresent(recordID: recordID, in: database, operationName: "upsertBook.fetch") ?? CKRecord(recordType: RecordType.book, recordID: recordID)
+
+        let payloadJSON = try Self.encodePayload(book.payload)
         let storedCoverAssetID = coverData.map(Self.makeCoverAssetID(from:)) ?? book.coverAssetID
 
-        record[BookField.repositoryID] = repositoryID as CKRecordValue
         record[BookField.title] = book.title as CKRecordValue
         record[BookField.author] = book.author as CKRecordValue
-        record[BookField.location] = book.location.rawValue as CKRecordValue
+        record[BookField.locationID] = book.locationID as CKRecordValue
         record[BookField.payload] = payloadJSON as CKRecordValue
-        if let storedCoverAssetID {
-            record[BookField.coverAssetID] = storedCoverAssetID as CKRecordValue
-        } else {
-            record[BookField.coverAssetID] = nil
-        }
-        record[BookField.schemaVersion] = Int64(payload.schemaVersion) as CKRecordValue
+        record[BookField.coverAssetID] = storedCoverAssetID as CKRecordValue?
+        record[BookField.schemaVersion] = Int64(book.payload.schemaVersion) as CKRecordValue
         record[BookField.createdAt] = book.createdAt as CKRecordValue
         record[BookField.updatedAt] = book.updatedAt as CKRecordValue
-        record[BookField.deletedAt] = nil
 
         let temporaryAssetFile = coverData.map { TemporaryAssetFile(data: $0, fileExtension: "bin") }
         defer {
@@ -520,21 +460,204 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
             record[BookField.coverAsset] = nil
         }
 
-        let savedRecord = try await saveRecordHandlingConflicts(record)
+        let savedRecord = try await saveRecord(record, in: database, operationName: "upsertBook.modify", zoneID: zoneID)
         return try Self.makeRemoteBookSnapshot(from: savedRecord, fallbackCoverData: coverData)
     }
 
-    func deleteBook(id: String, deletedAt: Date, in repositoryID: String) async throws {
+    func deleteBook(id: String, deletedAt: Date, in repository: LibraryRepositoryReference) async throws {
         try await ensureCloudAccountAvailable()
+        _ = deletedAt
 
-        let recordID = CKRecord.ID(recordName: Self.bookRecordName(repositoryID: repositoryID, bookID: id))
-        let record = try await fetchRecordIfPresent(recordID: recordID) ?? CKRecord(recordType: RecordType.book, recordID: recordID)
+        let database = database(for: repository.databaseScope)
+        let zoneID = repository.zoneID
+        let recordID = CKRecord.ID(recordName: RecordName.book(id), zoneID: zoneID)
+        _ = try await saveRecords([], deleting: [recordID], in: database, operationName: "deleteBook", zoneID: zoneID)
+    }
 
-        record[BookField.repositoryID] = repositoryID as CKRecordValue
-        record[BookField.updatedAt] = deletedAt as CKRecordValue
-        record[BookField.deletedAt] = deletedAt as CKRecordValue
+    func clearRepository(_ repository: LibraryRepositoryReference, resetLocations: [LibraryLocation]) async throws {
+        try await ensureCloudAccountAvailable()
+        let database = database(for: repository.databaseScope)
+        let zoneID = repository.zoneID
 
-        _ = try await saveRecordHandlingConflicts(record)
+        let bookRecords = try await fetchRecords(recordType: RecordType.book, inZoneWith: zoneID, database: database, operationName: "clearRepository.books")
+        let locationRecords = try await fetchRecords(recordType: RecordType.location, inZoneWith: zoneID, database: database, operationName: "clearRepository.locations")
+        let resetLocationRecordNames = Set(resetLocations.map { RecordName.location($0.id) })
+        let recordIDsToDelete =
+            bookRecords.map(\.recordID) +
+            locationRecords
+                .map(\.recordID)
+                .filter { !resetLocationRecordNames.contains($0.recordName) }
+
+        let repositoryRecord = try await fetchRecord(
+            recordID: CKRecord.ID(recordName: RecordName.repository, zoneID: zoneID),
+            in: database,
+            operationName: "clearRepository.repository"
+        )
+        repositoryRecord[RepositoryField.updatedAt] = Date() as CKRecordValue
+        let locationRecordsToSave = resetLocations.map { makeLocationRecord(for: $0, zoneID: zoneID) }
+        _ = try await saveRecords([repositoryRecord] + locationRecordsToSave, deleting: recordIDsToDelete, in: database, operationName: "clearRepository.modify", zoneID: zoneID)
+    }
+
+    func exportRepository(_ repository: LibraryRepositoryReference) async throws -> LibraryImportPackage {
+        let snapshot = try await refreshRepository(repository)
+        let locationsByID = Dictionary(uniqueKeysWithValues: snapshot.locations.map { ($0.id, $0) })
+
+        return LibraryImportPackage(
+            schemaVersion: LibraryImportPackage.currentSchemaVersion,
+            source: repository.name,
+            exportedAt: .now,
+            locations: snapshot.locations.map(LibraryImportLocation.init(location:)),
+            books: snapshot.books.map { LibraryImportBook(book: $0.book, coverData: $0.coverData, locationsByID: locationsByID) }
+        )
+    }
+
+    func deleteRepository(_ repository: LibraryRepositoryReference) async throws {
+        try await ensureCloudAccountAvailable()
+        guard repository.isOwner else {
+            throw LibraryRemoteServiceError.permissionDenied
+        }
+
+        let zoneID = repository.zoneID
+        _ = try await privateDatabase.modifyRecordZones(saving: [], deleting: [zoneID])
+    }
+
+    func acceptShare(metadata: CKShare.Metadata) async throws {
+        try await ensureCloudAccountAvailable()
+        _ = try await container.accept([metadata])
+    }
+
+    @MainActor
+    func makeSharingController(for repository: LibraryRepositoryReference) async throws -> UICloudSharingController {
+        guard repository.isOwner else {
+            throw LibraryRemoteServiceError.permissionDenied
+        }
+
+        try await ensureCloudAccountAvailable()
+        let share = try await fetchOrCreateZoneShare(for: repository)
+        let controller = UICloudSharingController(share: share, container: container)
+        controller.availablePermissions = [.allowPrivate, .allowReadWrite]
+        return controller
+    }
+
+    private func fetchOrCreateZoneShare(for repository: LibraryRepositoryReference) async throws -> CKShare {
+        let zone = try await fetchZone(zoneID: repository.zoneID, in: privateDatabase)
+
+        if let shareReference = zone.share,
+           let existingShare = try await fetchRecordIfPresent(recordID: shareReference.recordID, in: privateDatabase, operationName: "fetchOrCreateZoneShare.fetchShare") as? CKShare {
+            return existingShare
+        }
+
+        let share = CKShare(recordZoneID: repository.zoneID)
+        share[CKShare.SystemFieldKey.title] = repository.name as CKRecordValue
+        share.publicPermission = .none
+
+        guard let savedShare = try await saveRecord(share, in: privateDatabase, operationName: "fetchOrCreateZoneShare.createShare", zoneID: repository.zoneID) as? CKShare else {
+            throw LibraryRemoteServiceError.invalidCloudRecord
+        }
+
+        return savedShare
+    }
+
+    private func fetchRepositories(
+        in database: CKDatabase,
+        scope: CloudDatabaseScope,
+        role: RepositoryRole
+    ) async throws -> [LibraryRepositoryReference] {
+        let zoneIDs = try await fetchZoneIDs(in: database)
+        let zonesByID = try await fetchZones(zoneIDs: zoneIDs, in: database)
+        var repositories: [LibraryRepositoryReference] = []
+
+        for zoneID in zoneIDs {
+            let repositoryRecordID = CKRecord.ID(recordName: RecordName.repository, zoneID: zoneID)
+            guard let record = try await fetchRecordIfPresent(
+                recordID: repositoryRecordID,
+                in: database,
+                operationName: "fetchRepositories.shared.record"
+            ) else {
+                continue
+            }
+
+            guard let zone = zonesByID[zoneID] else {
+                continue
+            }
+
+            repositories.append(try makeRepositoryReference(from: record, role: role, scope: scope, zone: zone))
+        }
+
+        return repositories.sorted { left, right in
+            if left.role != right.role {
+                return left.role == .owner
+            }
+
+            return left.name.localizedStandardCompare(right.name) == .orderedAscending
+        }
+    }
+
+    private func fetchZoneIDs(in database: CKDatabase) async throws -> [CKRecordZone.ID] {
+        logCloudKit("fetchZoneIDs", scope: database.databaseScope, zoneID: nil, detail: "scan database changes")
+
+        do {
+            var changeToken: CKServerChangeToken?
+            var zoneIDs: Set<CKRecordZone.ID> = []
+            var moreComing = false
+
+            repeat {
+                let changes = try await database.databaseChanges(since: changeToken)
+                zoneIDs.formUnion(changes.modifications.map(\.zoneID))
+                changeToken = changes.changeToken
+                moreComing = changes.moreComing
+            } while moreComing
+
+            return zoneIDs.sorted { left, right in
+                if left.zoneName != right.zoneName {
+                    return left.zoneName < right.zoneName
+                }
+
+                return left.ownerName < right.ownerName
+            }
+        } catch {
+            logCloudKit("fetchZoneIDs.failed", scope: database.databaseScope, zoneID: nil, detail: "\(error)")
+            throw mapCloudError(error)
+        }
+    }
+
+    private func fetchZones(zoneIDs: [CKRecordZone.ID], in database: CKDatabase) async throws -> [CKRecordZone.ID: CKRecordZone] {
+        guard !zoneIDs.isEmpty else {
+            return [:]
+        }
+
+        logCloudKit("fetchZones", scope: database.databaseScope, zoneID: nil, detail: "count=\(zoneIDs.count)")
+
+        do {
+            let result = try await database.recordZones(for: zoneIDs)
+            var zones: [CKRecordZone.ID: CKRecordZone] = [:]
+
+            for zoneID in zoneIDs {
+                guard let value = result[zoneID] else {
+                    continue
+                }
+
+                switch value {
+                case .success(let zone):
+                    zones[zoneID] = zone
+                case .failure(let error):
+                    throw mapCloudError(error)
+                }
+            }
+
+            return zones
+        } catch {
+            logCloudKit("fetchZones.failed", scope: database.databaseScope, zoneID: nil, detail: "\(error)")
+            throw mapCloudError(error)
+        }
+    }
+
+    private func fetchZone(zoneID: CKRecordZone.ID, in database: CKDatabase) async throws -> CKRecordZone {
+        let zones = try await fetchZones(zoneIDs: [zoneID], in: database)
+        guard let zone = zones[zoneID] else {
+            throw LibraryRemoteServiceError.repositoryNotFound
+        }
+        return zone
     }
 
     private func ensureCloudAccountAvailable() async throws {
@@ -543,239 +666,205 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         }
 
         do {
-            let status = try await accountStatus()
-
+            let status = try await container.accountStatus()
             switch status {
             case .available:
                 hasValidatedCloudAccount = true
-                return
             case .noAccount:
                 throw LibraryRemoteServiceError.noCloudAccount
             default:
                 throw LibraryRemoteServiceError.unknown("当前 CloudKit 不可用，请稍后再试。")
             }
-        } catch let error as LibraryRemoteServiceError {
-            throw error
         } catch {
             throw mapCloudError(error)
         }
     }
 
-    private func accountStatus() async throws -> CKAccountStatus {
-        try await performRetryingCloudKitRequest {
-            try await withCheckedThrowingContinuation { continuation in
-                self.container.accountStatus { status, error in
-                    if let error {
-                        continuation.resume(throwing: error)
-                    } else {
-                        continuation.resume(returning: status)
-                    }
-                }
-            }
-        }
-    }
-
-    private func currentUserRecordID() async throws -> CKRecord.ID {
-        if let cachedCurrentUserRecordID {
-            return cachedCurrentUserRecordID
-        }
-
-        do {
-            let recordID = try await performRetryingCloudKitRequest {
-                try await self.container.userRecordID()
-            }
-            cachedCurrentUserRecordID = recordID
-            return recordID
-        } catch {
-            throw mapCloudError(error)
-        }
-    }
-
-    private func fetchRecord(recordID: CKRecord.ID) async throws -> CKRecord {
-        if let record = try await fetchRecordIfPresent(recordID: recordID) {
+    private func fetchRecord(
+        recordID: CKRecord.ID,
+        in database: CKDatabase,
+        operationName: String
+    ) async throws -> CKRecord {
+        if let record = try await fetchRecordIfPresent(recordID: recordID, in: database, operationName: operationName) {
             return record
         }
 
         throw LibraryRemoteServiceError.repositoryNotFound
     }
 
-    private func fetchRecordIfPresent(recordID: CKRecord.ID) async throws -> CKRecord? {
+    private func fetchRecordIfPresent(
+        recordID: CKRecord.ID,
+        in database: CKDatabase,
+        operationName: String
+    ) async throws -> CKRecord? {
+        logCloudKit(operationName, scope: database.databaseScope, zoneID: recordID.zoneID, detail: "fetch \(recordID.recordName)")
+
         do {
-            return try await performRetryingCloudKitRequest {
-                try await withCheckedThrowingContinuation { continuation in
-                    self.database.fetch(withRecordID: recordID) { record, error in
-                        if let ckError = error as? CKError, ckError.code == .unknownItem {
-                            continuation.resume(returning: nil)
-                            return
-                        }
+            let records = try await database.records(for: [recordID])
+            guard let recordResult = records[recordID] else {
+                return nil
+            }
 
-                        if let error {
-                            continuation.resume(throwing: error)
-                            return
-                        }
-
-                        continuation.resume(returning: record)
-                    }
+            switch recordResult {
+            case .success(let record):
+                return record
+            case .failure(let error):
+                let mappedError = mapCloudError(error)
+                if case LibraryRemoteServiceError.repositoryNotFound = mappedError {
+                    return nil
                 }
+
+                throw mappedError
             }
         } catch {
+            logCloudKit("\(operationName).failed", scope: database.databaseScope, zoneID: recordID.zoneID, detail: "\(error)")
             throw mapCloudError(error)
         }
     }
 
-    private func save(_ record: CKRecord) async throws -> CKRecord {
-        do {
-            return try await performRetryingCloudKitRequest {
-                try await withCheckedThrowingContinuation { continuation in
-                    self.database.save(record) { savedRecord, error in
-                        if let error {
-                            continuation.resume(throwing: error)
-                            return
-                        }
+    private func fetchRecords(
+        recordType: String,
+        inZoneWith zoneID: CKRecordZone.ID,
+        database: CKDatabase,
+        operationName: String
+    ) async throws -> [CKRecord] {
+        let records = try await fetchAllZoneRecords(
+            inZoneWith: zoneID,
+            database: database,
+            operationName: operationName
+        )
+        return records.filter { $0.recordType == recordType }
+    }
 
-                        if let savedRecord {
-                            continuation.resume(returning: savedRecord)
-                        } else {
-                            continuation.resume(throwing: LibraryRemoteServiceError.invalidCloudRecord)
-                        }
+    private func fetchAllZoneRecords(
+        inZoneWith zoneID: CKRecordZone.ID,
+        database: CKDatabase,
+        operationName: String
+    ) async throws -> [CKRecord] {
+        logCloudKit(operationName, scope: database.databaseScope, zoneID: zoneID, detail: "scan zone records")
+
+        do {
+            var recordsByID: [CKRecord.ID: CKRecord] = [:]
+            var changeToken: CKServerChangeToken?
+            var moreComing = false
+
+            repeat {
+                let changes = try await database.recordZoneChanges(inZoneWith: zoneID, since: changeToken)
+                for (recordID, result) in changes.modificationResultsByID {
+                    switch result {
+                    case .success(let modification):
+                        recordsByID[recordID] = modification.record
+                    case .failure(let error):
+                        throw mapCloudError(error)
                     }
                 }
-            }
+                for deletion in changes.deletions {
+                    recordsByID[deletion.recordID] = nil
+                }
+                changeToken = changes.changeToken
+                moreComing = changes.moreComing
+            } while moreComing
+
+            return Array(recordsByID.values)
         } catch {
+            logCloudKit("\(operationName).failed", scope: database.databaseScope, zoneID: zoneID, detail: "\(error)")
             throw mapCloudError(error)
         }
     }
 
-    private func saveRecordHandlingConflicts(_ record: CKRecord) async throws -> CKRecord {
+    private func saveRecord(
+        _ record: CKRecord,
+        in database: CKDatabase,
+        operationName: String,
+        zoneID: CKRecordZone.ID
+    ) async throws -> CKRecord {
+        let result = try await saveRecords([record], deleting: [], in: database, operationName: operationName, zoneID: zoneID)
+        guard let recordResult = result.saveResults[record.recordID] else {
+            throw LibraryRemoteServiceError.invalidCloudRecord
+        }
+
+        switch recordResult {
+        case .success(let savedRecord):
+            return savedRecord
+        case .failure(let error):
+            throw mapCloudError(error)
+        }
+    }
+
+    private func saveRecords(
+        _ records: [CKRecord],
+        deleting recordIDs: [CKRecord.ID] = [],
+        in database: CKDatabase,
+        operationName: String,
+        zoneID: CKRecordZone.ID
+    ) async throws -> (saveResults: [CKRecord.ID: Result<CKRecord, Error>], deleteResults: [CKRecord.ID: Result<Void, Error>]) {
+        logCloudKit(operationName, scope: database.databaseScope, zoneID: zoneID, detail: "save=\(records.count) delete=\(recordIDs.count)")
+
         do {
-            return try await save(record)
+            return try await database.modifyRecords(saving: records, deleting: recordIDs, savePolicy: .changedKeys, atomically: true)
         } catch let error as CKError where error.code == .serverRecordChanged {
-            guard let serverRecord = error.userInfo[CKRecordChangedErrorServerRecordKey] as? CKRecord else {
+            guard let serverRecord = error.userInfo[CKRecordChangedErrorServerRecordKey] as? CKRecord,
+                  let conflictingRecord = records.first(where: { $0.recordID == serverRecord.recordID }) else {
                 throw mapCloudError(error)
             }
 
-            Self.copyWritableFields(from: record, to: serverRecord)
-            return try await save(serverRecord)
+            Self.copyWritableFields(from: conflictingRecord, to: serverRecord)
+            return try await database.modifyRecords(saving: [serverRecord], deleting: recordIDs, savePolicy: .changedKeys, atomically: true)
         } catch {
+            logCloudKit("\(operationName).failed", scope: database.databaseScope, zoneID: zoneID, detail: "\(error)")
             throw mapCloudError(error)
         }
     }
 
-    private func performQuery(
-        _ query: CKQuery,
-        resultsLimit: Int = CKQueryOperation.maximumResults,
-        desiredKeys: [String]? = nil
-    ) async throws -> [CKRecord] {
-        var allRecords: [CKRecord] = []
-        var currentCursor: CKQueryOperation.Cursor?
-
-        repeat {
-            let page = try await performQueryPage(
-                query: currentCursor == nil ? query : nil,
-                cursor: currentCursor,
-                resultsLimit: resultsLimit,
-                desiredKeys: desiredKeys
-            )
-            allRecords.append(contentsOf: page.records)
-            currentCursor = page.cursor
-        } while currentCursor != nil
-
-        return allRecords
-    }
-
-    private func performQueryPage(
-        query: CKQuery?,
-        cursor: CKQueryOperation.Cursor?,
-        resultsLimit: Int,
-        desiredKeys: [String]?
-    ) async throws -> (records: [CKRecord], cursor: CKQueryOperation.Cursor?) {
-        do {
-            return try await performRetryingCloudKitRequest {
-                try await withCheckedThrowingContinuation { continuation in
-                    var records: [CKRecord] = []
-                    let operation: CKQueryOperation = {
-                        if let cursor {
-                            return CKQueryOperation(cursor: cursor)
-                        }
-
-                        return CKQueryOperation(query: query!)
-                    }()
-
-                    operation.resultsLimit = resultsLimit
-                    operation.desiredKeys = desiredKeys
-                    operation.recordMatchedBlock = { _, result in
-                        if case .success(let record) = result {
-                            records.append(record)
-                        }
-                    }
-                    operation.queryResultBlock = { result in
-                        switch result {
-                        case .success(let cursor):
-                            continuation.resume(returning: (records, cursor))
-                        case .failure(let error):
-                            continuation.resume(throwing: error)
-                        }
-                    }
-
-                    self.database.add(operation)
-                }
-            }
-        } catch {
-            throw mapCloudError(error)
+    private func database(for scope: CloudDatabaseScope) -> CKDatabase {
+        switch scope {
+        case .private:
+            return privateDatabase
+        case .shared:
+            return sharedDatabase
         }
     }
 
-    private func performUnfilteredQuery(
-        recordType: String,
-        resultsLimit: Int = CKQueryOperation.maximumResults,
-        desiredKeys: [String]? = nil
-    ) async throws -> [CKRecord] {
-        // Avoid hard dependency on CloudKit schema indexes such as __createdBy,
-        // accessAccount, and repositoryID during development and fresh containers.
-        let query = CKQuery(recordType: recordType, predicate: NSPredicate(value: true))
-        return try await performQuery(query, resultsLimit: resultsLimit, desiredKeys: desiredKeys)
+    private func makeZoneName() -> String {
+        "\(liveTestZonePrefix)\(UUID().uuidString)"
     }
 
-    private func performRetryingCloudKitRequest<T>(
-        _ operation: @escaping @Sendable () async throws -> T
-    ) async throws -> T {
-        var attempt = 0
-
-        while true {
-            do {
-                return try await operation()
-            } catch {
-                guard let delay = Self.retryDelay(for: error, attempt: attempt, maxRetryAttempts: maxRetryAttempts) else {
-                    throw error
-                }
-
-                attempt += 1
-                try await Task.sleep(for: .seconds(delay))
-            }
-        }
+    private func makeLocationRecord(for location: LibraryLocation, zoneID: CKRecordZone.ID) -> CKRecord {
+        let record = CKRecord(recordType: RecordType.location, recordID: CKRecord.ID(recordName: RecordName.location(location.id), zoneID: zoneID))
+        record[LocationField.name] = location.name as CKRecordValue
+        record[LocationField.sortOrder] = Int64(location.sortOrder) as CKRecordValue
+        record[LocationField.isVisible] = location.isVisible as CKRecordValue
+        return record
     }
 
-    nonisolated private static func retryDelay(
-        for error: Error,
-        attempt: Int,
-        maxRetryAttempts: Int
-    ) -> TimeInterval? {
-        guard attempt < maxRetryAttempts, let cloudError = error as? CKError else {
-            return nil
-        }
-
-        switch cloudError.code {
-        case .networkUnavailable, .networkFailure, .serverResponseLost:
-            return 0.75 * pow(2, Double(attempt))
-        case .serviceUnavailable, .requestRateLimited, .zoneBusy:
-            return retryAfter(for: cloudError) ?? (1.0 * pow(2, Double(attempt)))
-        default:
-            return nil
-        }
+    private func makeRepositoryReference(
+        from record: CKRecord,
+        role: RepositoryRole,
+        scope: CloudDatabaseScope,
+        zone: CKRecordZone
+    ) throws -> LibraryRepositoryReference {
+        LibraryRepositoryReference(
+            id: record.recordID.zoneID.zoneName,
+            name: try Self.requireStringField(RepositoryField.name, in: record),
+            role: role,
+            databaseScope: scope,
+            zoneName: record.recordID.zoneID.zoneName,
+            zoneOwnerName: record.recordID.zoneID.ownerName,
+            shareRecordName: zone.share?.recordID.recordName,
+            shareStatus: zone.share == nil ? .notShared : .shared
+        )
     }
 
-    nonisolated private static func retryAfter(for error: CKError) -> TimeInterval? {
-        (error.userInfo[CKErrorRetryAfterKey] as? NSNumber)?.doubleValue
+    private func logCloudKit(_ operation: String, scope: CKDatabase.Scope, zoneID: CKRecordZone.ID?, detail: String) {
+        #if DEBUG
+        logger.notice("[\(operation)] scope=\(String(describing: scope), privacy: .public) zone=\(zoneID?.zoneName ?? "-", privacy: .public) detail=\(detail, privacy: .public)")
+        #else
+        let environment = LibraryEnvironment.resolved(ProcessInfo.processInfo.environment)
+        if environment["HOME_LIBRARY_DEBUG_CLOUDKIT"] == "1" ||
+            environment["HOME_LIBRARY_CLOUDKIT_LIVE_TESTS"] == "1" {
+            logger.notice("[\(operation)] scope=\(String(describing: scope), privacy: .public) zone=\(zoneID?.zoneName ?? "-", privacy: .public) detail=\(detail, privacy: .public)")
+        }
+        #endif
     }
 
     private func mapCloudError(_ error: Error) -> Error {
@@ -802,11 +891,15 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
             return LibraryRemoteServiceError.accountTemporarilyUnavailable
         case .permissionFailure:
             return LibraryRemoteServiceError.permissionDenied
-        case .unknownItem:
+        case .unknownItem, .zoneNotFound:
             return LibraryRemoteServiceError.repositoryNotFound
         default:
             return LibraryRemoteServiceError.unknown(error.localizedDescription)
         }
+    }
+
+    nonisolated private static func retryAfter(for error: CKError) -> TimeInterval? {
+        (error.userInfo[CKErrorRetryAfterKey] as? NSNumber)?.doubleValue
     }
 
     nonisolated private static func extractMissingQueryableField(from message: String) -> String? {
@@ -822,27 +915,13 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         return String(message[markerRange.upperBound..<suffixRange.lowerBound]).trimmed.nilIfEmpty
     }
 
-    nonisolated private static func makeRepositoryDescriptor(from record: CKRecord) throws -> RepositoryDescriptor {
-        RepositoryDescriptor(
-            id: record.recordID.recordName,
-            name: try requireStringField(RepositoryField.name, in: record),
-            ownerProfileID: try requireStringField(RepositoryField.ownerProfileID, in: record),
-            accessAccount: try requireStringField(RepositoryField.accessAccount, in: record)
+    nonisolated private static func makeLocation(from record: CKRecord) throws -> LibraryLocation {
+        LibraryLocation(
+            id: record.recordID.recordName.replacingOccurrences(of: "location.", with: ""),
+            name: try requireStringField(LocationField.name, in: record),
+            sortOrder: Int(try requireInt64Field(LocationField.sortOrder, in: record)),
+            isVisible: (record[LocationField.isVisible] as? NSNumber)?.boolValue ?? true
         )
-    }
-
-    nonisolated private static func selectOwnedRepository(
-        from records: [CKRecord],
-        preferredOwnerProfileID: String
-    ) -> CKRecord {
-        let preferredRecords = records.filter { record in
-            (record[RepositoryField.ownerProfileID] as? String) == preferredOwnerProfileID
-        }
-
-        let candidates = preferredRecords.isEmpty ? records : preferredRecords
-        return candidates.max { left, right in
-            repositoryUpdatedAt(left) < repositoryUpdatedAt(right)
-        } ?? records[0]
     }
 
     nonisolated private static func makeRemoteBookSnapshot(
@@ -855,7 +934,7 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         let updatedAt = try requireDateField(BookField.updatedAt, in: record)
         let coverAssetID = record[BookField.coverAssetID] as? String
 
-        let bookID = Self.extractBookID(from: record.recordID.recordName)
+        let bookID = record.recordID.recordName.replacingOccurrences(of: "book.", with: "")
         let book = Book(
             id: bookID,
             payload: payload,
@@ -874,6 +953,14 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         }
 
         return value
+    }
+
+    nonisolated private static func requireInt64Field(_ key: String, in record: CKRecord) throws -> Int64 {
+        guard let value = record[key] as? NSNumber else {
+            throw LibraryRemoteServiceError.invalidCloudRecord
+        }
+
+        return value.int64Value
     }
 
     nonisolated private static func requireDateField(_ key: String, in record: CKRecord) throws -> Date {
@@ -908,18 +995,6 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         }
     }
 
-    nonisolated private static func extractBookID(from recordName: String) -> String {
-        guard let separatorIndex = recordName.firstIndex(of: "|") else {
-            return recordName
-        }
-
-        return String(recordName[recordName.index(after: separatorIndex)...])
-    }
-
-    nonisolated private static func bookRecordName(repositoryID: String, bookID: String) -> String {
-        "\(repositoryID)|\(bookID)"
-    }
-
     nonisolated private static func loadAssetData(from asset: CKAsset?) -> Data? {
         guard let url = asset?.fileURL else {
             return nil
@@ -928,64 +1003,34 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         return try? Data(contentsOf: url)
     }
 
-    nonisolated private static func generateCredentials() -> RepositoryCredentials {
-        RepositoryCredentials(
-            account: "HL\(Self.makeRandomCode(length: 8))",
-            password: Self.makeRandomPassword()
-        )
-    }
-
-    nonisolated private static func makeRandomPassword() -> String {
-        [
-            makeRandomCode(length: 4),
-            makeRandomCode(length: 4),
-            makeRandomCode(length: 4)
-        ]
-        .joined(separator: "-")
-    }
-
-    nonisolated private static func makeRandomCode(length: Int) -> String {
-        let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
-        return String((0..<length).compactMap { _ in alphabet.randomElement() })
-    }
-
-    nonisolated private static func makeRepositoryID() -> String {
-        "repo.\(UUID().uuidString)"
-    }
-
-    nonisolated private static func makeSalt() -> String {
-        UUID().uuidString.replacingOccurrences(of: "-", with: "")
-    }
-
-    nonisolated private static func makePasswordHash(password: String, salt: String) -> String {
-        let data = Data("\(salt):\(password)".utf8)
-        let digest = SHA256.hash(data: data)
-        return digest.map { String(format: "%02x", $0) }.joined()
-    }
-
     nonisolated private static func makeCoverAssetID(from data: Data) -> String {
         let digest = SHA256.hash(data: data)
         let hex = digest.map { String(format: "%02x", $0) }.joined()
         return "cover-\(hex)"
     }
+}
 
-    nonisolated private static func repositoryUpdatedAt(_ record: CKRecord) -> Date {
-        if let updatedAt = record[RepositoryField.updatedAt] as? Date {
-            return updatedAt
+private extension Dictionary where Key == CKRecordZone.ID, Value == CKRecordZone {
+    func record(for zoneID: CKRecordZone.ID) throws -> CKRecordZone {
+        guard let zone = self[zoneID] else {
+            throw LibraryRemoteServiceError.repositoryNotFound
         }
-
-        return record.modificationDate ?? .distantPast
+        return zone
     }
 }
 
-nonisolated private struct TemporaryAssetFile: Sendable {
+private extension LibraryRepositoryReference {
+    var zoneID: CKRecordZone.ID {
+        CKRecordZone.ID(zoneName: zoneName, ownerName: zoneOwnerName)
+    }
+}
+
+private final class TemporaryAssetFile {
     let url: URL
 
     init(data: Data, fileExtension: String) {
-        url = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension(fileExtension)
-
+        let directoryURL = FileManager.default.temporaryDirectory
+        url = directoryURL.appendingPathComponent(UUID().uuidString).appendingPathExtension(fileExtension)
         try? data.write(to: url, options: [.atomic])
     }
 

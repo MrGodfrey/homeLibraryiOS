@@ -1,388 +1,267 @@
 # homeLibrary
 
-`homeLibrary` 是一个面向 iPhone 的家庭藏书协作应用。
+`homeLibrary` 是一个面向 iPhone 的家庭书库应用。
 
-当前实现把 CloudKit 公共数据库作为唯一远端主存。设备端保留仓库会话和本地缓存，但普通运行路径已经不再提供独立的“本地模式”回退。应用启动后会直接准备 CloudKit 仓库，并围绕同一个仓库完成浏览、搜索、录入、编辑、删除和协作加入。
+它的核心目标不是“把书存进 CloudKit”这么简单，而是让一个家庭围绕同一套书库长期使用：主人维护仓库，家庭成员通过 iCloud 标准共享加入；首页专注浏览与查找；仓库设置页承接迁移、地点配置、清空、导出和共享管理。
 
-## 1. 当前版本结论
+## 1. 设计方式
 
-- 平台是 `iPhone only`
-- 普通运行默认使用 `CloudKitLibraryService`
-- 测试和显式指定 `HOME_LIBRARY_REMOTE_DRIVER=memory` 时，才会切到内存远端
-- 本地目录只承担缓存、会话和一次性迁移入口，不再是同步源
-- 拥有者首次进入空仓库时，会按需导入旧结构或 bundled `SeedBooks.json`
+- 需求先于实现  
+  先问这个应用要长期服务什么，再决定 CloudKit、缓存、页面结构和测试分层怎么写。
 
-如果当前设备没有可用的 iCloud 账号、签名缺少 CloudKit entitlement，或者 App ID / provisioning profile 没有开启 iCloud capability，应用不会回退到本地仓库，而是直接报 CloudKit 相关错误。
+- 最简单可行架构  
+  只保留满足需求所需的最小结构：一个仓库一个 CloudKit 自定义 zone，主人在 `privateCloudDatabase` 持有，成员在 `sharedCloudDatabase` 访问。
 
-## 2. 用户流程
+- 系统共享优先  
+  家庭协作只走 `CKShare`，不再自造仓库账号密码，不再维护额外身份体系。
 
-### 2.1 首次启动
+- 默认测试稳定，真网测试显式  
+  常规单测和 UI 测试继续走内存驱动；真实 CloudKit 测试只在显式入口下运行，不污染默认测试路径。
 
-应用启动后，`LibraryStore` 会按下面的顺序决定当前仓库：
+- 变更可追踪  
+  每次结构性修改、测试环境调整和 CloudKit 经验结论，都要追加写入 `log.md`。
 
-1. 优先使用当前会话里已经保存的仓库
-2. 如果当前仓库为空但自己已有拥有者仓库，则切回自己的仓库
-3. 如果两者都没有，则通过 CloudKit 自动创建一个拥有者仓库
+## 2. 需求
 
-拥有者仓库首次为空时，系统会尝试读取旧数据并导入：
+### 2.1 这个应用要长期解决什么问题？
 
-- 旧结构目录：`books/`、`covers/`、`deletions/`
-- 旧单文件：`books.json`
-- 结构化种子：`SeedBooks.json`、`LibraryImport.json`
+1. 一个家庭需要共享同一套书库，而不是每个人维护一份分裂的副本。
+2. 书库中的“地点”不是写死枚举，而是仓库级配置。
+3. 浏览体验要优先于后台信息展示：首页只看书，不看仓库承载细节。
+4. 旧数据必须能迁进来，而且迁移过程要可见、可验证。
+5. CloudKit 相关问题要能被定位，不能只给一个模糊的“网络失败”。
 
-导入完成后会记录迁移标记，避免重复执行。
+### 2.2 当前版本必须做到什么？
 
-### 2.2 浏览、筛选和搜索
+- 主人可创建自有仓库。
+- 仓库通过 `CKShare` 共享给家庭成员。
+- 成员从 `sharedCloudDatabase` 访问共享仓库。
+- 书籍、地点、导出、清空都围绕“当前仓库”执行。
+- 首页支持动态地点切换、双栏书墙、悬浮搜索和两段式卡片操作。
+- 仓库设置页支持地点配置、高级管理区和系统共享入口。
+- 旧结构数据可一次性迁移到新仓库。
+- 默认测试稳定可重复；真实 CloudKit 集成测试可在已登录测试 iCloud 的 `iPhone 17` 模拟器上显式运行。
 
-主页面当前支持：
+### 2.3 当前版本明确不做什么？
 
-- 按 `全部` / `成都` / `重庆` 切换列表
-- 按书名、作者、出版社和自定义字段搜索
-- 显示当前仓库标题、角色和同步状态
-- 手动刷新远端数据
+- 不再使用仓库账号密码加入。
+- 不把默认 UI 测试切到真网 CloudKit。
+- 不为 `Development` 和 `Production` 维护两套数据格式。
+- 不在首页显示仓库作用域、角色或 CloudKit 承载信息。
 
-### 2.3 添加、编辑和删除
+## 3. 用户接口
 
-当前版本只保留手动录入：
+### 3.1 首次进入
 
-- 书名
-- 作者
-- 出版社
-- 出版年份
-- 所在地
-- 自定义字段
-- 从相册选择或替换封面
+- 如果当前会话已有仓库，直接进入该仓库。
+- 如果没有仓库但可发现已有仓库，恢复到该仓库。
+- 如果还没有任何仓库，用户可创建自己的家庭书库。
 
-保存会直接写入当前 CloudKit 仓库，并刷新本地缓存。删除使用远端软删除字段，缓存中的对应书籍会随刷新移除。
+### 3.2 浏览、筛选和搜索
 
-### 2.4 仓库协作
+- 顶部固定透明地点切换条，支持 `全部 + 动态地点列表`。
+- 顶部标题 `家藏万卷` 在向上滚动超过阈值后隐藏。
+- 书籍以双栏书墙展示，稳定显示：封面、标题、作者、出版社、地点。
+- 底部搜索为悬浮毛玻璃控件，不再使用顶部 `.searchable`。
 
-“仓库管理”页当前负责四件事：
+### 3.3 录入、编辑和删除
 
-1. 查看当前仓库和自己的角色
-2. 拥有者查看并复制仓库账号和密码
-3. 拥有者重新生成账号密码
-4. 加入者通过账号密码加入别人的仓库，并可切回自己的仓库
+- 新建书籍默认沿用当前地点筛选；如果当前是 `全部`，则回退到仓库默认地点。
+- 编辑页地点列表来自当前仓库配置，不再写死 `成都 / 重庆`。
+- 卡片交互采用两段式：先选中卡片，再点击 `修改 / 删除`。
 
-当前协作模型是家庭级门槛控制，不是企业级权限系统。核心约束是：
+### 3.4 仓库设置
 
-- 远端状态存在 CloudKit 公共数据库
-- 仓库边界由 `LibraryRepository` 记录决定
-- 加入流程依赖应用内生成的仓库账号密码
+仓库设置页分成三块：
 
-## 3. 数据与同步模型
+1. 仓库信息  
+   当前仓库名称、角色、共享状态、可访问仓库切换。
+2. 地点配置  
+   新增、删除、排序、控制是否显示在首页。
+3. 高级管理区  
+   旧数据迁移、清空当前仓库、导出当前仓库 zip。
 
-### 3.1 领域对象
+### 3.5 共享
 
-| 对象 | 作用 | 当前实现 |
-| --- | --- | --- |
-| `LibraryRepository` | 协作边界；决定当前在操作哪个家庭书库 | CloudKit 记录 |
-| `LibraryBook` | 书籍主记录 | CloudKit 记录 |
-| `Book` | UI 和缓存使用的本地模型 | `homeLibrary/Book.swift` |
-| `BookPayload` | 版本化业务字段容器 | 编码进 `LibraryBook.payload` |
-| `RepositoryCredentials` | 仓库加入凭据 | 账号 + 密码 |
+- 只有 owner 可以发起共享。
+- 分享入口走系统 `UICloudSharingController`。
+- 接受分享走系统回调和 `CKAcceptSharesOperation`。
+- 成员加入后从 `sharedCloudDatabase` 读取和写入共享仓库。
 
-### 3.2 CloudKit 记录
+## 4. 数据与同步架构
 
-当前 CloudKit 使用两类记录：
+### 4.1 仓库模型
 
-- `LibraryRepository`
-- `LibraryBook`
+每个家庭书库对应一个 CloudKit 自定义 zone。
 
-其中：
+- owner 数据库：`privateCloudDatabase`
+- member 数据库：`sharedCloudDatabase`
+- zone 根记录：`LibraryRepository`
+- 书籍记录：`LibraryBook`
+- 地点记录：`LibraryLocation`
 
-- `LibraryBook.payload` 保存版本化 JSON
-- 封面以 `CKAsset` 形式上传
-- 删除通过 `deletedAt` 软删除，不做即时物理清除
+`LibraryRepositoryReference` 现在是 share-aware 的，至少包含：
 
-### 3.3 本地状态
+- 仓库 id
+- 显示名
+- 角色
+- 数据库作用域
+- zone 标识
+- share record 标识
+- share 状态
 
-本地状态分成三部分：
+### 4.2 书籍与地点
 
-| 组件 | 作用 | 当前实现 |
-| --- | --- | --- |
-| `LibraryCacheStore` | 仓库级缓存 | `Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/` |
-| `RepositorySessionStore` | 当前仓库、拥有者仓库、迁移标记、拥有者 profile id | `UserDefaults` |
-| `LegacyLibraryImporter` | 读取旧结构和种子，执行一次性导入 | `homeLibrary/LibraryPersistence.swift` |
+- 旧 `BookLocation` 枚举已经废弃。
+- 书籍主模型现在保存 `locationID`。
+- 仓库级 `LibraryLocation` 负责名称、排序和显示控制。
+- 首页的“全部”只是 UI 虚拟筛选项，不进入持久化。
 
-缓存目录结构：
+### 4.3 本地缓存
+
+本地缓存只承担当前仓库快照与封面缓存，不承担独立同步源职责。
+
+目录结构：
 
 ```text
 Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 ├── manifest.json
+├── locations.json
 ├── books/
 │   └── <book-id>.json
 └── covers/
     └── <cover-asset-id>.bin
 ```
 
-这里的缓存不是独立仓库，不承担本地优先同步职责。它只是远端快照和封面资产缓存。
+### 4.4 迁移与导出
 
-## 4. 运行装配
+- 旧 `books/`、`covers/`、`deletions/`、`books.json`、`SeedBooks.json`、`LibraryImport.json` 都可以作为一次性迁移输入。
+- 默认迁移会把旧 `成都 / 重庆` 映射成新的仓库地点配置。
+- 导出统一为 zip，根目录只有 `LibraryImport.json`。
+- 导出包内嵌封面数据，可直接再导入。
 
-`homeLibrary/LibraryAppConfiguration.swift` 当前的装配逻辑很简单：
+## 5. CloudKit 环境
 
-- 普通运行：`CloudKitLibraryService`
-- `XCTest` 宿主：`InMemoryLibraryRemoteService`
-- 显式设置 `HOME_LIBRARY_REMOTE_DRIVER=memory`：`InMemoryLibraryRemoteService`
+### 5.1 当前配置
 
-### 4.1 支持的环境变量
+- bundle id：`yu.homeLibrary`
+- CloudKit container：`iCloud.yu.homeLibrary`
+- entitlement：`homeLibrary/homeLibrary.entitlements`
+- `Info.plist`：`CKSharingSupported = true`
 
-| 变量 | 作用 |
-| --- | --- |
-| `HOME_LIBRARY_REMOTE_DRIVER=memory` | 强制使用内存远端，主要供测试和受控调试使用 |
-| `HOME_LIBRARY_STORAGE_ROOT` | 重定向本地缓存根目录 |
-| `HOME_LIBRARY_STORAGE_NAMESPACE` | 为缓存和会话隔离命名空间 |
-| `HOME_LIBRARY_SESSION_NAMESPACE` | 单独覆盖会话命名空间 |
-| `HOME_LIBRARY_CLOUDKIT_CONTAINER` | 覆盖默认 CloudKit 容器 id |
-| `HOME_LIBRARY_DISABLE_BUNDLED_SEED=1` | 禁用 bundle 内的种子导入来源 |
+### 5.2 Development 和 Production 有什么区别？
 
-当前已经移除基于 `Debug` / `Release` 自动切换本地模式的逻辑，也不再支持通过环境变量关闭 CloudKit 进入旧本地路径。
+业务模型和数据格式没有区别。
 
-## 5. 签名与 CloudKit
+区别只在：
 
-真实设备运行需要三层都一致：
+- CloudKit schema 所在环境不同
+- schema 发布节奏不同
+- 真实数据隔离不同
 
-1. target 带有 iCloud capability
-2. entitlements 包含 `com.apple.developer.icloud-services = CloudKit`
-3. App ID / provisioning profile 已启用对应 iCloud 容器
+也就是说：
 
-当前工程固定使用：
+- 你不需要为 `Development` 和 `Production` 维护两套导出格式或两套模型
+- 你需要把 schema 变更先在 `Development` 验证，再决定是否部署到 `Production`
 
-- bundle id: `yu.homeLibrary`
-- CloudKit 容器：`iCloud.yu.homeLibrary`
-- entitlement 文件：`homeLibrary/homeLibrary.entitlements`
+### 5.3 真实共享链路
 
-`homeLibrary.xcodeproj` 当前已在 `Debug` 和 `Release` 都绑定 `homeLibrary/homeLibrary.entitlements`。也就是说，普通真机调试包和发布包都要求签名链路具备 CloudKit 能力。
+正确链路是：
 
-如果你修改了 signing / capability，或者之前设备上安装过不带 CloudKit entitlement 的旧包，需要重新 build 并重新安装 app。
+1. owner 在私有 zone 上创建或获取 `CKShare`
+2. 系统分享面板发出邀请链接
+3. 被邀请者接受链接
+4. App 收到分享 metadata
+5. `CKAcceptSharesOperation` 接受共享
+6. 共享仓库出现在 `sharedCloudDatabase`
 
-### 5.1 CloudKit Dashboard 索引配置指南
+### 5.4 调试模式
 
-除了签名和 entitlement，当前项目还有一个很容易忽略的前提：**CloudKit Schema 里的索引必须配好**。
-
-如果真机上看到下面这类报错：
-
-- `Field __createdBy is not marked queryable`
-- `Field recordName is not marked queryable`
-- `Field accessAccount is not marked queryable`
-- `Field repositoryID is not marked queryable`
-
-这不是“网络断了”，而是 **CloudKit Schema 缺少 QUERYABLE 索引**。
-
-当前代码已经尽量减少了对索引的依赖。按 `2026-04-15` 之后的实现，最关键的是：
-
-- `LibraryRepository.recordName` 要有 `QUERYABLE`
-- `LibraryBook.recordName` 要有 `QUERYABLE`
-
-如果你后续又把查询逻辑改回“按字段直接查”，那还可能需要给下面字段补 `QUERYABLE`：
-
-- `LibraryRepository.__createdBy`
-- `LibraryRepository.accessAccount`
-- `LibraryBook.repositoryID`
-
-### 5.2 在 CloudKit Dashboard 里添加 QUERYABLE 的具体步骤
-
-下面步骤默认你在配置当前工程使用的容器：
-
-- 容器：`iCloud.yu.homeLibrary`
-- 开发环境：`Development`
-
-#### 第一步：打开容器
-
-1. 打开 [CloudKit Console](https://icloud.developer.apple.com/dashboard/)
-2. 登录和当前 Apple Developer Team 对应的开发者账号
-3. 选择容器 `iCloud.yu.homeLibrary`
-4. 先切到 `Development` 环境，不要一开始就在 `Production` 上改
-
-#### 第二步：检查 `LibraryRepository`
-
-1. 进入 `Schema`
-2. 找到 record type `LibraryRepository`
-3. 打开这个 record type 的字段或索引配置页
-4. 找到系统字段 `recordName`
-5. 把它标记为 `QUERYABLE`
-
-有些界面会把系统字段显示成 `recordName`，有些资料会写成 `___recordId`。这两个说的是同一个系统字段映射，不用纠结名字差异，关键是把 `recordName` 对应的查询索引打开。
-
-如果你当前看到的是字段列表页面，并且右上角有 `Edit Indexes` 按钮，那么可以直接走这条路径：
-
-1. 点右上 `Edit Indexes`
-2. 在 `recordName` 这一行，把 `Single Field Indexes` 从 `None` 改成 `Queryable`
-3. 保存
-
-如果你在当前页面里没有看到可直接切换的下拉或开关，也可以走另一条路径：
-
-1. 回到 `Schema`
-2. 进入 `Indexes`
-3. 点击 `+`
-4. `Record Type` 选择 `LibraryRepository`
-5. `Index Type` 选择 `QUERYABLE`
-6. `Field` 选择 `recordName`
-7. 保存
-
-如果后面报 `__createdBy is not marked queryable`，在 Dashboard 里对应的字段通常显示为 `createdUserRecordName`。这时也可以按同样方式补一个 `QUERYABLE` 索引。
-
-#### 第三步：检查 `LibraryBook`
-
-1. 继续留在 `Schema`
-2. 找到 record type `LibraryBook`
-3. 打开字段或索引配置页
-4. 找到系统字段 `recordName`
-5. 同样把它标记为 `QUERYABLE`
-
-对 `LibraryBook` 也可以走同样的两条路径：
-
-- 在 record type 页面点 `Edit Indexes`，把 `recordName` 改成 `Queryable`
-- 或者回到 `Schema -> Indexes -> +`，新建：
-  - `Record Type = LibraryBook`
-  - `Index Type = QUERYABLE`
-  - `Field = recordName`
-
-#### 第四步：如果你仍然报其他字段 not marked queryable
-
-继续在对应 record type 里把报错字段补成 `QUERYABLE`：
-
-- 报 `__createdBy`：去 `LibraryRepository` 里给 `__createdBy` 加 `QUERYABLE`
-- 报 `accessAccount`：去 `LibraryRepository` 里给 `accessAccount` 加 `QUERYABLE`
-- 报 `repositoryID`：去 `LibraryBook` 里给 `repositoryID` 加 `QUERYABLE`
-
-#### 第五步：保存并等待 CloudKit 生效
-
-1. 保存 schema 修改
-2. 等待一小段时间让 CloudKit 后台完成索引更新
-3. 删除 iPhone 上已有的旧安装包
-4. 从 Xcode 重新 build 并安装到真机
-5. 重新打开 app 验证
-
-CloudKit 的索引更新不是完全瞬时的。如果你刚改完就立即重试，仍然看到旧错误，不一定是你改错了，也可能只是索引还没完全生效。
-
-### 5.3 什么时候还要把 Development 部署到 Production
-
-Xcode 直连真机调试时，通常先吃到的是 `Development` 环境的 schema。
-
-如果你后面准备：
-
-- 给其他测试人员安装
-- 用 TestFlight 分发
-- 走正式发布包
-
-那还需要把已经验证过的 schema 变更部署到 `Production`。否则会出现：
-
-- 开发机正常
-- 换一个包或换一个环境就再次报 schema / queryable 错误
-
-### 5.4 建议的最小排障顺序
-
-如果真机首次运行失败，建议按下面顺序排：
-
-1. 确认 iPhone 已登录可用的 iCloud 账号
-2. 确认 Xcode 安装到设备上的包带有 CloudKit entitlement
-3. 确认容器 `iCloud.yu.homeLibrary` 选对了 team 和环境
-4. 先检查 `LibraryRepository.recordName`
-5. 再检查 `LibraryBook.recordName`
-6. 如果仍失败，按错误原文继续给对应字段补 `QUERYABLE`
-7. 删除设备旧包，重新安装，再试一次
-
-### 5.5 当前项目和索引的关系
-
-当前项目使用两个 CloudKit record type：
-
-- `LibraryRepository`
-- `LibraryBook`
-
-其中：
-
-- `LibraryRepository` 负责仓库边界、拥有者信息和加入凭据
-- `LibraryBook` 负责书籍主记录、封面引用和软删除状态
-
-应用启动时会查询仓库记录；进入书库后会查询书籍记录。所以只要 Schema 里缺少对应索引，真机就可能在启动阶段直接报错，甚至还没走到书籍列表。
-
-## 6. 代码结构
+如果要追 CloudKit 失败细节，可打开：
 
 ```text
-homeLibrary/
-├── homeLibrary/
-│   ├── Book.swift
-│   ├── BookEditorView.swift
-│   ├── ContentView.swift
-│   ├── LibraryAppConfiguration.swift
-│   ├── LibraryPersistence.swift
-│   ├── LibraryStore.swift
-│   ├── LibrarySync.swift
-│   ├── LibrarySyncSettings.swift
-│   ├── RepositoryManagementView.swift
-│   ├── homeLibrary.entitlements
-│   └── homeLibraryApp.swift
-├── homeLibraryTests/
-├── homeLibraryUITests/
-├── docs/
-├── scripts/
-├── plan.md
-├── log.md
-└── README.md
+HOME_LIBRARY_DEBUG_CLOUDKIT=1
 ```
 
-页面层尽量不直接操作持久化和 CloudKit。主要职责分布如下：
+调试日志会尽量保留脱敏上下文：
 
-| 文件 | 作用 |
-| --- | --- |
-| `homeLibrary/homeLibraryApp.swift` | 应用入口，创建唯一的 `LibraryStore` |
-| `homeLibrary/ContentView.swift` | 列表、筛选、搜索、刷新、弹窗入口 |
-| `homeLibrary/BookEditorView.swift` | 书籍编辑与封面选择 |
-| `homeLibrary/RepositoryManagementView.swift` | 仓库信息、凭据、加入和切换 |
-| `homeLibrary/LibraryStore.swift` | 状态编排、同步触发、缓存刷新 |
-| `homeLibrary/LibrarySync.swift` | CloudKit / 内存远端实现 |
-| `homeLibrary/LibraryPersistence.swift` | 缓存、旧数据导入、JSON 编解码 |
+- 操作名
+- 数据库作用域
+- zone 名
+- CloudKit 原始错误
+- 用户可见错误映射
 
-## 7. 开发与验证
+### 5.5 关于 QUERYABLE 索引
 
-### 7.1 构建
+当前主路径已经尽量避免依赖旧公共库架构下的“全库 query + queryable index”。
 
-```bash
-xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary \
-  -destination 'platform=iOS Simulator,name=iPhone 17' \
-  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+仓库发现和 zone 内全量读取现在优先走：
+
+- `databaseChanges(since:)`
+- `recordZoneChanges(inZoneWith:since:)`
+- 固定根记录 `repository`
+
+因此，旧 README 中把 `recordName` queryable 当成主线前提的说明已经降级为兼容旧实现时的排障补充，而不是当前架构的核心依赖。
+
+## 6. 测试策略
+
+### 6.1 默认测试
+
+默认单测和 UI 测试继续走内存远端：
+
+- 快
+- 稳定
+- 可重复
+- 不依赖 iCloud 账号状态
+
+`LibraryAppConfiguration.live()` 的规则是：
+
+- `HOME_LIBRARY_REMOTE_DRIVER=cloudkit` 时，即使在 XCTest 宿主下也强制用 CloudKit
+- 未显式指定时，XCTest 默认还是 memory
+
+### 6.2 真实 CloudKit 集成测试
+
+当前 live 测试入口：
+
+- target：`homeLibraryTests`
+- case：`CloudKitLiveIntegrationTests`
+
+固定约束：
+
+- CloudKit 环境：`Development`
+- 模拟器：booted `iPhone 17`
+- iCloud 账号：当前模拟器已登录的专用测试账号
+- 数据隔离：`library.live-test.*` zone 前缀
+
+运行时环境：
+
+```text
+HOME_LIBRARY_REMOTE_DRIVER=cloudkit
+HOME_LIBRARY_STORAGE_NAMESPACE=cloudkit-live-tests
+HOME_LIBRARY_CLOUDKIT_LIVE_TESTS=1
 ```
 
-### 7.2 单元测试
+如果你用的是支持 test-runner env 的工具，需要把这些变量注入到测试运行器；当前代码也兼容 `TEST_RUNNER_` 前缀环境变量。
 
-```bash
-xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary \
-  -destination 'platform=iOS Simulator,name=iPhone 17' \
-  -parallel-testing-enabled NO \
-  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
-  -only-testing:homeLibraryTests test
-```
+### 6.3 当前已覆盖的真网能力
 
-### 7.3 UI 测试
+- 创建专用测试仓库
+- 仓库发现
+- 写入书籍
+- 读取回显
+- 导出仓库
+- 清空仓库
+- 自动清理测试仓库
 
-```bash
-xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary \
-  -destination 'platform=iOS Simulator,name=iPhone 17' \
-  -parallel-testing-enabled NO \
-  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
-  -only-testing:homeLibraryUITests test
-```
+### 6.4 当前仍然保留为手动验收的内容
 
-### 7.4 当前已验证范围
+- 跨账号接受分享
+- owner 移除参与者后的权限变化
+- 真网 UI 层共享验收
 
-截至 `2026-04-15`，当前仓库已经验证：
+## 7. 仓库约定
 
-- iOS Simulator 构建通过
-- `homeLibraryTests` 共 `10` 个单元测试通过
-- `homeLibraryUITests` 共 `3` 个 UI 测试通过
-- 面向已连接真机的 `Debug` build 通过
-- `Debug` / `Release` 的 build settings 都能解析出同一个 `CODE_SIGN_ENTITLEMENTS`
-
-## 8. 迁移种子
-
-旧 Cloudflare 数据可以通过 `scripts/import_from_cloudflare.mjs` 导出为 `homeLibrary/SeedBooks.json`。迁移脚本说明见 `docs/cloudflare-migration.md`。
-
-示例：
-
-```bash
-node scripts/import_from_cloudflare.mjs \
-  --source-repo /Users/wangyu/code/Home-library \
-  --output homeLibrary/SeedBooks.json
-```
+- `README.md` 采用需求优先结构
+- `log.md` 只追加，不回写历史
+- `plan.md` 保留当前主线实施计划
+- 每次结构性修改后，都要补充测试与 CloudKit 环境记录

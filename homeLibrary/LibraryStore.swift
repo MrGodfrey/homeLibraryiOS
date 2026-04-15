@@ -5,22 +5,27 @@
 //  Created by Codex on 2026/4/14.
 //
 
+import CloudKit
 import Combine
 import Foundation
+import UIKit
 
 @MainActor
 final class LibraryStore: ObservableObject {
     @Published private(set) var books: [Book] = []
+    @Published private(set) var locations: [LibraryLocation] = []
+    @Published private(set) var availableRepositories: [LibraryRepositoryReference] = []
     @Published var searchText = ""
-    @Published var activeTab: LibraryFilterTab = .all
+    @Published var selectedLocationID: String?
     @Published private(set) var isLoading = false
     @Published private(set) var isSaving = false
     @Published private(set) var isCreatingRepository = false
     @Published private(set) var isImportingLegacyData = false
     @Published private(set) var syncStatus: LibrarySyncStatus
     @Published private(set) var currentRepository: LibraryRepositoryReference?
-    @Published private(set) var ownedRepository: LibraryRepositoryReference?
     @Published var alertMessage: String?
+    @Published private(set) var importProgress: RepositoryImportProgress?
+    @Published private(set) var latestExportURL: URL?
 
     private let configuration: LibraryAppConfiguration
     private let cacheStore: LibraryCacheStore
@@ -34,17 +39,21 @@ final class LibraryStore: ObservableObject {
 
     init(configuration: LibraryAppConfiguration) {
         self.configuration = configuration
-        self.cacheStore = configuration.cacheStore
-        self.sessionStore = configuration.sessionStore
-        self.remoteService = configuration.remoteService
-        self.sessionState = configuration.sessionStore.load()
-        self.ownedRepository = sessionState.ownedRepository
-        self.currentRepository = sessionState.currentRepository
-        self.syncStatus = .idle
+        cacheStore = configuration.cacheStore
+        sessionStore = configuration.sessionStore
+        remoteService = configuration.remoteService
+        sessionState = configuration.sessionStore.load()
+        currentRepository = sessionState.currentRepository
+        syncStatus = .idle
     }
 
     var visibleBooks: [Book] {
-        LibraryFilter.filteredBooks(from: books, query: searchText, tab: activeTab)
+        LibraryFilter.filteredBooks(
+            from: books,
+            query: searchText,
+            selectedLocationID: selectedLocationID,
+            locationsByID: locationsByID
+        )
     }
 
     var hasRepository: Bool {
@@ -52,51 +61,51 @@ final class LibraryStore: ObservableObject {
     }
 
     var hasOwnedRepository: Bool {
-        ownedRepository != nil
+        availableRepositories.contains(where: \.isOwner)
     }
 
     var canSearch: Bool {
         hasLoaded && hasRepository
     }
 
-    var repositoryTitle: String {
-        if let currentRepository {
-            return currentRepository.name
-        }
+    var canManageLocations: Bool {
+        hasRepository
+    }
 
-        return isLoading ? "正在检查仓库" : "还没有仓库"
+    var canManageSharing: Bool {
+        currentRepository?.isOwner == true && remoteService is CloudKitLibraryService
+    }
+
+    var repositoryTitle: String {
+        currentRepository?.name ?? "还没有仓库"
     }
 
     var repositorySubtitle: String {
-        if let currentRepository {
-            return currentRepository.subtitle
-        }
-
-        if isLoading {
-            return "正在检查当前 iCloud 账号下是否已有可用仓库。"
-        }
-
-        return "当前设备没有可用仓库。你可以创建自己的仓库，或者从旧 JSON 迁移。"
+        currentRepository?.subtitle ?? "当前设备还没有可访问的家庭书库。"
     }
 
     var repositoryRoleTitle: String {
         currentRepository?.role.title ?? "未连接"
     }
 
-    var repositoryCredentials: RepositoryCredentials? {
-        ownedRepository?.credentials
+    var repositoryScopeTitle: String {
+        currentRepository?.databaseScope.title ?? "未连接"
     }
 
-    var canManageCloudRepository: Bool {
-        true
+    var shareStatusTitle: String {
+        currentRepository?.shareStatus.title ?? "未共享"
     }
 
-    var canSwitchToOwnedRepository: Bool {
-        guard let ownedRepository else {
-            return false
+    var visibleLocationFilters: [LibraryLocationFilter] {
+        [LibraryLocationFilter.all] + visibleLocations.map(LibraryLocationFilter.init(location:))
+    }
+
+    var defaultLocationID: String {
+        if let selectedLocationID, locationsByID[selectedLocationID] != nil {
+            return selectedLocationID
         }
 
-        return currentRepository?.id != ownedRepository.id
+        return visibleLocations.first?.id ?? locations.first?.id ?? LibraryLocation.defaultLocations()[0].id
     }
 
     func loadBooksIfNeeded() async {
@@ -120,21 +129,22 @@ final class LibraryStore: ObservableObject {
         }
 
         do {
-            guard let repository = try await resolveCurrentRepositoryIfNeeded() else {
+            guard let repository = try await resolveCurrentRepository(forceRefresh: force) else {
                 books = []
+                locations = []
                 coverCache = [:]
                 syncStatus = .idle
                 hasLoaded = true
                 return
             }
 
-            let didRestoreCachedBooks = await restoreCachedBooksIfAvailable(repositoryID: repository.id)
-            if didRestoreCachedBooks {
-                isLoading = false
+            let didRestoreCache = await restoreCachedContentIfAvailable(repositoryID: repository.id)
+            if didRestoreCache {
                 hasLoaded = true
+                isLoading = false
             }
 
-            try await refreshFromCloud(repositoryID: repository.id)
+            try await refreshFromCloud(repository: repository)
             hasLoaded = true
         } catch {
             let message = Self.userFacingMessage(for: error)
@@ -144,11 +154,75 @@ final class LibraryStore: ObservableObject {
     }
 
     @discardableResult
+    func createOwnedRepository() async -> Bool {
+        guard !isCreatingRepository else {
+            return false
+        }
+
+        isCreatingRepository = true
+        defer { isCreatingRepository = false }
+
+        do {
+            let repository = try await remoteService.createOwnedRepository(
+                preferredName: configuration.preferredOwnedRepositoryName
+            )
+            sessionState.currentRepository = repository
+            persistSessionState()
+            try await refreshAvailableRepositories(selecting: repository)
+            try await refreshFromCloud(repository: repository)
+            return true
+        } catch {
+            let message = Self.userFacingMessage(for: error)
+            alertMessage = message
+            syncStatus = .failed(message)
+            return false
+        }
+    }
+
+    func switchRepository(to repository: LibraryRepositoryReference) async {
+        sessionState.currentRepository = repository
+        persistSessionState()
+        await loadBooks(force: true)
+    }
+
+    @discardableResult
+    func saveLocations(_ draftLocations: [LibraryLocation]) async -> Bool {
+        guard let repository = currentRepository else {
+            alertMessage = "当前还没有可写入的仓库。"
+            return false
+        }
+
+        do {
+            let savedLocations = try await remoteService.saveLocations(draftLocations, in: repository)
+            locations = savedLocations
+            validateSelectedLocation()
+            try await replaceCache(
+                books: books,
+                locations: savedLocations,
+                coverDataByAssetID: [:],
+                repositoryID: repository.id,
+                synchronizedAt: Date()
+            )
+            return true
+        } catch {
+            let message = Self.userFacingMessage(for: error)
+            alertMessage = message
+            syncStatus = .failed(message)
+            return false
+        }
+    }
+
+    @discardableResult
     func saveBook(draft: BookDraft, editing existingBook: Book?) async -> Bool {
         let normalizedDraft = draft.normalized
 
         guard normalizedDraft.canSave else {
-            alertMessage = "书名不能为空。"
+            alertMessage = "书名和地点不能为空。"
+            return false
+        }
+
+        guard let repository = currentRepository else {
+            alertMessage = "请先创建或切换到一个仓库。"
             return false
         }
 
@@ -156,11 +230,6 @@ final class LibraryStore: ObservableObject {
         defer { isSaving = false }
 
         do {
-            guard let repository = try await resolveCurrentRepositoryIfNeeded() else {
-                alertMessage = "请先创建仓库，或先加入一个仓库。"
-                return false
-            }
-
             let now = Date()
             let preservedCoverAssetID = normalizedDraft.keepsExistingCoverReference ? existingBook?.coverAssetID : nil
             let book = Book(
@@ -169,7 +238,7 @@ final class LibraryStore: ObservableObject {
                 author: normalizedDraft.author,
                 publisher: normalizedDraft.publisher,
                 year: normalizedDraft.year,
-                location: normalizedDraft.location,
+                locationID: normalizedDraft.locationID,
                 customFields: normalizedDraft.customFields,
                 coverAssetID: preservedCoverAssetID,
                 createdAt: existingBook?.createdAt ?? now,
@@ -177,16 +246,9 @@ final class LibraryStore: ObservableObject {
             )
 
             syncStatus = .syncing
-
-            let snapshot = try await remoteService.upsertBook(
-                book,
-                coverData: normalizedDraft.coverData,
-                in: repository.id
-            )
-
+            let snapshot = try await remoteService.upsertBook(book, coverData: normalizedDraft.coverData, in: repository)
             try await writeSnapshotToCache(snapshot, repositoryID: repository.id, synchronizedAt: now)
             syncStatus = .upToDate(now)
-
             try await reloadFromCache(repositoryID: repository.id)
             return true
         } catch {
@@ -199,19 +261,18 @@ final class LibraryStore: ObservableObject {
 
     @discardableResult
     func deleteBook(_ book: Book) async -> Bool {
+        guard let repository = currentRepository else {
+            alertMessage = "当前还没有可写入的仓库。"
+            return false
+        }
+
         isSaving = true
         defer { isSaving = false }
 
         do {
-            guard let repository = try await resolveCurrentRepositoryIfNeeded() else {
-                alertMessage = "当前还没有可写入的仓库。"
-                return false
-            }
-
             let deletedAt = Date()
-
             syncStatus = .syncing
-            try await remoteService.deleteBook(id: book.id, deletedAt: deletedAt, in: repository.id)
+            try await remoteService.deleteBook(id: book.id, deletedAt: deletedAt, in: repository)
             syncStatus = .upToDate(deletedAt)
 
             let cacheStore = self.cacheStore
@@ -238,9 +299,8 @@ final class LibraryStore: ObservableObject {
             return cached
         }
 
-        let cacheStore = self.cacheStore
-
         do {
+            let cacheStore = self.cacheStore
             let data = try await Task.detached(priority: .utility) {
                 try cacheStore.coverData(for: assetID, repositoryID: repositoryID)
             }.value
@@ -273,117 +333,68 @@ final class LibraryStore: ObservableObject {
     }
 
     @discardableResult
-    func joinRepository(account: String, password: String) async -> Bool {
-        do {
-            let descriptor = try await remoteService.joinRepository(account: account, password: password)
-            let joinedRepository = LibraryRepositoryReference(
-                id: descriptor.id,
-                name: descriptor.name,
-                role: .member,
-                accessAccount: descriptor.accessAccount,
-                savedPassword: password.trimmed
-            )
-
-            sessionState.currentRepository = joinedRepository
-            persistSessionState()
-            await loadBooks(force: true)
-            return true
-        } catch {
-            let message = Self.userFacingMessage(for: error)
-            alertMessage = message
-            syncStatus = .failed(message)
-            return false
-        }
-    }
-
-    func switchToOwnedRepository() async {
-        guard let ownedRepository = sessionState.ownedRepository else {
-            alertMessage = "当前设备还没有自己的仓库。"
-            return
-        }
-
-        sessionState.currentRepository = ownedRepository
-        persistSessionState()
-        await loadBooks(force: true)
-    }
-
-    @discardableResult
-    func createOwnedRepository() async -> Bool {
-        guard !isCreatingRepository else {
-            return false
-        }
-
-        isCreatingRepository = true
-        defer { isCreatingRepository = false }
-
-        do {
-            if let ownedRepository = sessionState.ownedRepository {
-                sessionState.currentRepository = ownedRepository
-                persistSessionState()
-                await loadBooks(force: true)
-                return true
-            }
-
-            if let descriptor = try await remoteService.fetchOwnedRepository(ownerProfileID: sessionState.ownerProfileID) {
-                let ownedRepository = makeOwnedRepositoryReference(from: descriptor)
-                sessionState.ownerProfileID = descriptor.ownerProfileID
-                sessionState.ownedRepository = ownedRepository
-                sessionState.currentRepository = ownedRepository
-                persistSessionState()
-                await loadBooks(force: true)
-                return true
-            }
-
-            let bootstrap = try await remoteService.createOwnedRepository(
-                ownerProfileID: sessionState.ownerProfileID,
-                preferredName: configuration.preferredOwnedRepositoryName
-            )
-            let ownedRepository = makeOwnedRepositoryReference(
-                from: bootstrap.descriptor,
-                savedPassword: bootstrap.credentials.password
-            )
-
-            sessionState.ownerProfileID = bootstrap.descriptor.ownerProfileID
-            sessionState.ownedRepository = ownedRepository
-            sessionState.currentRepository = ownedRepository
-            persistSessionState()
-            await loadBooks(force: true)
-            return true
-        } catch {
-            let message = Self.userFacingMessage(for: error)
-            alertMessage = message
-            syncStatus = .failed(message)
-            return false
-        }
-    }
-
-    @discardableResult
     func importLegacyJSON(from fileURL: URL) async -> Bool {
         guard !isImportingLegacyData else {
             return false
         }
 
         isImportingLegacyData = true
-        defer { isImportingLegacyData = false }
+        importProgress = RepositoryImportProgress(phase: .counting, totalCount: 0, importedCount: 0)
+        defer {
+            isImportingLegacyData = false
+        }
 
         do {
-            let repository = try await ensureOwnedRepositoryForMigration()
-            let importer = configuration.legacyImporter
-            let importedBooks = try await loadImportedBooks(using: importer, from: fileURL)
+            let repository = try await ensureOwnedRepositoryForImport()
+            let bundle = try await loadImportBundle(from: fileURL)
+            let normalizedLocations = normalizeImportedLocations(bundle.locations)
+            let totalCount = bundle.books.count
 
-            guard !importedBooks.isEmpty else {
+            guard totalCount > 0 else {
+                importProgress = nil
                 alertMessage = "选中的 JSON 没有可导入的书籍。"
                 return false
             }
 
-            syncStatus = .syncing
+            importProgress = RepositoryImportProgress(phase: .importing, totalCount: totalCount, importedCount: 0)
+            _ = try await remoteService.saveLocations(normalizedLocations, in: repository)
 
-            for imported in importedBooks.sorted(by: { $0.book.updatedAt < $1.book.updatedAt }) {
-                _ = try await remoteService.upsertBook(imported.book, coverData: imported.coverData, in: repository.id)
+            syncStatus = .syncing
+            for (index, imported) in bundle.books.sorted(by: { $0.book.updatedAt < $1.book.updatedAt }).enumerated() {
+                _ = try await remoteService.upsertBook(imported.book, coverData: imported.coverData, in: repository)
+                importProgress = RepositoryImportProgress(
+                    phase: .importing,
+                    totalCount: totalCount,
+                    importedCount: index + 1
+                )
             }
 
-            try await refreshFromCloud(repositoryID: repository.id)
-            alertMessage = "已导入 \(importedBooks.count) 本旧书，并切换到我的仓库。"
+            importProgress = RepositoryImportProgress(phase: .completed, totalCount: totalCount, importedCount: totalCount)
+            sessionStore.markLegacyMigrationCompleted(for: repository.id)
+            try await refreshFromCloud(repository: repository)
+            alertMessage = "已完成导入，共 \(totalCount) 本。"
+            return true
+        } catch {
+            importProgress = nil
+            let message = Self.userFacingMessage(for: error)
+            alertMessage = message
+            syncStatus = .failed(message)
+            return false
+        }
+    }
+
+    @discardableResult
+    func clearCurrentRepository() async -> Bool {
+        guard let repository = currentRepository else {
+            alertMessage = "当前还没有仓库。"
+            return false
+        }
+
+        do {
+            let resetLocations = LibraryLocation.defaultLocations()
+            try await remoteService.clearRepository(repository, resetLocations: resetLocations)
+            try await refreshFromCloud(repository: repository)
+            alertMessage = "当前仓库已经清空。"
             return true
         } catch {
             let message = Self.userFacingMessage(for: error)
@@ -394,44 +405,90 @@ final class LibraryStore: ObservableObject {
     }
 
     @discardableResult
-    func regenerateOwnedRepositoryCredentials() async -> Bool {
-        guard let ownedRepository = sessionState.ownedRepository else {
-            alertMessage = "当前没有可管理的 CloudKit 仓库。"
-            return false
+    func exportCurrentRepository() async -> URL? {
+        guard let repository = currentRepository else {
+            alertMessage = "当前还没有仓库。"
+            return nil
         }
 
         do {
-            let credentials = try await remoteService.rotateCredentials(
-                for: ownedRepository.id,
-                ownerProfileID: sessionState.ownerProfileID
-            )
+            let package = try await remoteService.exportRepository(repository)
+            let data = try LibraryJSONCodec.makeEncoder().encode(package)
+            let exportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("homeLibrary-exports", isDirectory: true)
+            try FileManager.default.createDirectory(at: exportDirectory, withIntermediateDirectories: true)
 
-            let updatedOwnedRepository = LibraryRepositoryReference(
-                id: ownedRepository.id,
-                name: ownedRepository.name,
-                role: .owner,
-                accessAccount: credentials.account,
-                savedPassword: credentials.password
-            )
-
-            sessionState.ownedRepository = updatedOwnedRepository
-
-            if sessionState.currentRepository?.id == updatedOwnedRepository.id {
-                sessionState.currentRepository = updatedOwnedRepository
-            }
-
-            persistSessionState()
-            alertMessage = "已生成新的仓库账号密码。"
-            return true
+            let sanitizedName = repository.name.replacingOccurrences(of: "/", with: "-").trimmed.nilIfEmpty ?? "homeLibrary"
+            let url = exportDirectory.appendingPathComponent("\(sanitizedName)-\(Int(Date().timeIntervalSince1970)).zip")
+            try LibraryZipArchiveWriter.writeSingleFileArchive(filename: "LibraryImport.json", fileData: data, to: url)
+            latestExportURL = url
+            return url
         } catch {
             let message = Self.userFacingMessage(for: error)
             alertMessage = message
             syncStatus = .failed(message)
-            return false
+            return nil
+        }
+    }
+
+    func consumeLatestExportURL() -> URL? {
+        defer { latestExportURL = nil }
+        return latestExportURL
+    }
+
+    func dismissImportProgress() {
+        importProgress = nil
+    }
+
+    func removeRepository(_ repository: LibraryRepositoryReference) async {
+        do {
+            try await remoteService.deleteRepository(repository)
+            if currentRepository?.id == repository.id && currentRepository?.databaseScope == repository.databaseScope {
+                sessionState.currentRepository = nil
+                persistSessionState()
+            }
+            await loadBooks(force: true)
+        } catch {
+            alertMessage = Self.userFacingMessage(for: error)
+        }
+    }
+
+    func makeSharingControllerForCurrentRepository() async throws -> UICloudSharingController {
+        guard let repository = currentRepository,
+              let service = remoteService as? CloudKitLibraryService else {
+            throw LibraryRemoteServiceError.permissionDenied
+        }
+
+        return try await service.makeSharingController(for: repository)
+    }
+
+    func acceptShareMetadata(_ metadata: CKShare.Metadata) async {
+        guard let service = remoteService as? CloudKitLibraryService else {
+            return
+        }
+
+        do {
+            let existingIDs = Set(availableRepositories.map { "\($0.databaseScope.rawValue):\($0.id)" })
+            try await service.acceptShare(metadata: metadata)
+            let repositories = try await remoteService.listRepositories()
+            availableRepositories = repositories
+            if let newRepository = repositories.first(where: { !existingIDs.contains("\($0.databaseScope.rawValue):\($0.id)") }) {
+                sessionState.currentRepository = newRepository
+                persistSessionState()
+            }
+            await loadBooks(force: true)
+        } catch {
+            let message = Self.userFacingMessage(for: error)
+            alertMessage = message
+            syncStatus = .failed(message)
         }
     }
 
     nonisolated static func userFacingMessage(for error: Error) -> String {
+        if let localizedError = error as? LocalizedError,
+           let description = localizedError.errorDescription?.trimmed.nilIfEmpty {
+            return description
+        }
+
         if let localizedDescription = error.localizedDescription.trimmed.nilIfEmpty {
             return localizedDescription
         }
@@ -439,86 +496,96 @@ final class LibraryStore: ObservableObject {
         return "发生了未预期的错误。"
     }
 
-    private func refreshFromCloud(repositoryID: String) async throws {
-        syncStatus = .syncing
-        let snapshots = try await remoteService.fetchBooks(in: repositoryID)
-        let synchronizedAt = Date()
-        try await replaceCache(with: snapshots, repositoryID: repositoryID, synchronizedAt: synchronizedAt)
-        try await reloadFromCache(repositoryID: repositoryID)
-        syncStatus = .upToDate(synchronizedAt)
-
-        Task { [weak self] in
-            guard let self else {
-                return
-            }
-
-            try? await self.reconcileRepositoryMetadata(for: repositoryID)
-        }
+    private var locationsByID: [String: LibraryLocation] {
+        Dictionary(uniqueKeysWithValues: locations.map { ($0.id, $0) })
     }
 
-    private func resolveCurrentRepositoryIfNeeded() async throws -> LibraryRepositoryReference? {
-        if let currentRepository = sessionState.currentRepository {
-            currentRepositoryChanged(currentRepository)
-            return currentRepository
+    private var visibleLocations: [LibraryLocation] {
+        locations
+            .filter(\.isVisible)
+            .sorted { $0.sortOrder < $1.sortOrder }
+    }
+
+    private func resolveCurrentRepository(forceRefresh: Bool) async throws -> LibraryRepositoryReference? {
+        if forceRefresh || availableRepositories.isEmpty {
+            try await refreshAvailableRepositories(selecting: sessionState.currentRepository)
         }
 
-        if let ownedRepository = sessionState.ownedRepository {
-            sessionState.currentRepository = ownedRepository
+        if let currentRepository = sessionState.currentRepository,
+           let refreshedRepository = availableRepositories.first(where: { $0.id == currentRepository.id && $0.databaseScope == currentRepository.databaseScope }) {
+            sessionState.currentRepository = refreshedRepository
             persistSessionState()
-            return ownedRepository
+            return refreshedRepository
         }
 
-        guard let descriptor = try await remoteService.fetchOwnedRepository(ownerProfileID: sessionState.ownerProfileID) else {
-            currentRepositoryChanged(nil)
-            return nil
+        if let ownerRepository = availableRepositories.first(where: \.isOwner) {
+            sessionState.currentRepository = ownerRepository
+            persistSessionState()
+            return ownerRepository
         }
 
-        let ownedRepository = makeOwnedRepositoryReference(from: descriptor)
-        sessionState.ownerProfileID = descriptor.ownerProfileID
-        sessionState.ownedRepository = ownedRepository
-        sessionState.currentRepository = ownedRepository
+        if let sharedRepository = availableRepositories.first {
+            sessionState.currentRepository = sharedRepository
+            persistSessionState()
+            return sharedRepository
+        }
+
+        sessionState.currentRepository = nil
         persistSessionState()
-        return ownedRepository
+        return nil
     }
 
-    private func reconcileRepositoryMetadata(for repositoryID: String) async throws {
-        let descriptor = try await remoteService.fetchRepository(id: repositoryID)
+    private func refreshAvailableRepositories(selecting preferredRepository: LibraryRepositoryReference?) async throws {
+        let repositories = try await remoteService.listRepositories()
+        availableRepositories = repositories
 
-        if var ownedRepository = sessionState.ownedRepository, ownedRepository.id == repositoryID {
-            sessionState.ownerProfileID = descriptor.ownerProfileID
-            ownedRepository.name = descriptor.name
-            ownedRepository.accessAccount = descriptor.accessAccount
-            sessionState.ownedRepository = ownedRepository
+        if let preferredRepository,
+           let resolvedRepository = repositories.first(where: { $0.id == preferredRepository.id && $0.databaseScope == preferredRepository.databaseScope }) {
+            sessionState.currentRepository = resolvedRepository
+        } else if sessionState.currentRepository == nil {
+            sessionState.currentRepository = repositories.first(where: \.isOwner) ?? repositories.first
         }
+    }
 
-        if var currentRepository = sessionState.currentRepository, currentRepository.id == repositoryID {
-            currentRepository.name = descriptor.name
-            currentRepository.accessAccount = descriptor.accessAccount
-            sessionState.currentRepository = currentRepository
-        }
+    private func refreshFromCloud(repository: LibraryRepositoryReference) async throws {
+        syncStatus = .syncing
+        let snapshot = try await remoteService.refreshRepository(repository)
+        let synchronizedAt = Date()
+        try await replaceCache(
+            books: snapshot.books.map(\.book),
+            locations: snapshot.locations,
+            coverDataByAssetID: snapshot.books.reduce(into: [String: Data]()) { partialResult, snapshot in
+                guard let assetID = snapshot.book.coverAssetID, let coverData = snapshot.coverData else {
+                    return
+                }
 
+                partialResult[assetID] = coverData
+            },
+            repositoryID: snapshot.repository.id,
+            synchronizedAt: synchronizedAt
+        )
+
+        currentRepositoryChanged(snapshot.repository)
+        try await reloadFromCache(repositoryID: snapshot.repository.id)
+        validateSelectedLocation()
+        syncStatus = .upToDate(synchronizedAt)
+        try await refreshAvailableRepositories(selecting: snapshot.repository)
         persistSessionState()
     }
 
     private func replaceCache(
-        with snapshots: [RemoteBookSnapshot],
+        books: [Book],
+        locations: [LibraryLocation],
+        coverDataByAssetID: [String: Data],
         repositoryID: String,
         synchronizedAt: Date
     ) async throws {
-        let books = snapshots.map(\.book)
-        let coverDataByAssetID = snapshots.reduce(into: [String: Data]()) { partialResult, snapshot in
-            guard let assetID = snapshot.book.coverAssetID, let coverData = snapshot.coverData else {
-                return
-            }
-
-            partialResult[assetID] = coverData
-        }
-
         let cacheStore = self.cacheStore
 
         try await Task.detached(priority: .utility) {
-            try cacheStore.replaceAllBooks(
-                books,
+            try cacheStore.replaceAllContent(
+                books: books,
+                locations: locations,
                 coverDataByAssetID: coverDataByAssetID,
                 repositoryID: repositoryID,
                 synchronizedAt: synchronizedAt
@@ -536,11 +603,7 @@ final class LibraryStore: ObservableObject {
         let cacheStore = self.cacheStore
 
         let storedBook = try await Task.detached(priority: .utility) {
-            try cacheStore.upsert(
-                book: snapshot.book,
-                coverData: snapshot.coverData,
-                repositoryID: repositoryID
-            )
+            try cacheStore.upsert(book: snapshot.book, coverData: snapshot.coverData, repositoryID: repositoryID)
         }.value
 
         if let assetID = storedBook.coverAssetID, let coverData = snapshot.coverData {
@@ -554,8 +617,8 @@ final class LibraryStore: ObservableObject {
 
     private func reloadFromCache(repositoryID: String) async throws {
         let snapshot = try await loadCacheSnapshot(repositoryID: repositoryID)
-
         books = snapshot.books
+        locations = snapshot.locations
         coverCache = coverCache.filter { snapshot.referencedAssetIDs.contains($0.key) }
     }
 
@@ -566,51 +629,34 @@ final class LibraryStore: ObservableObject {
         }.value
     }
 
-    private func restoreCachedBooksIfAvailable(repositoryID: String) async -> Bool {
+    private func restoreCachedContentIfAvailable(repositoryID: String) async -> Bool {
         do {
             try await reloadFromCache(repositoryID: repositoryID)
-            return !books.isEmpty
+            validateSelectedLocation()
+            return !books.isEmpty || !locations.isEmpty
         } catch {
             return false
         }
     }
 
-    private func ensureOwnedRepositoryForMigration() async throws -> LibraryRepositoryReference {
-        if let ownedRepository = sessionState.ownedRepository {
+    private func ensureOwnedRepositoryForImport() async throws -> LibraryRepositoryReference {
+        if let currentRepository, currentRepository.isOwner {
+            return currentRepository
+        }
+
+        if let ownedRepository = availableRepositories.first(where: \.isOwner) {
             sessionState.currentRepository = ownedRepository
             persistSessionState()
             return ownedRepository
         }
 
-        if let descriptor = try await remoteService.fetchOwnedRepository(ownerProfileID: sessionState.ownerProfileID) {
-            let ownedRepository = makeOwnedRepositoryReference(from: descriptor)
-            sessionState.ownerProfileID = descriptor.ownerProfileID
-            sessionState.ownedRepository = ownedRepository
-            sessionState.currentRepository = ownedRepository
-            persistSessionState()
-            return ownedRepository
-        }
-
-        let bootstrap = try await remoteService.createOwnedRepository(
-            ownerProfileID: sessionState.ownerProfileID,
-            preferredName: configuration.preferredOwnedRepositoryName
-        )
-        let ownedRepository = makeOwnedRepositoryReference(
-            from: bootstrap.descriptor,
-            savedPassword: bootstrap.credentials.password
-        )
-
-        sessionState.ownerProfileID = bootstrap.descriptor.ownerProfileID
-        sessionState.ownedRepository = ownedRepository
-        sessionState.currentRepository = ownedRepository
+        let repository = try await remoteService.createOwnedRepository(preferredName: configuration.preferredOwnedRepositoryName)
+        sessionState.currentRepository = repository
         persistSessionState()
-        return ownedRepository
+        return repository
     }
 
-    private func loadImportedBooks(
-        using importer: LegacyLibraryImporter,
-        from fileURL: URL
-    ) async throws -> [LegacyImportedBook] {
+    private func loadImportBundle(from fileURL: URL) async throws -> LegacyImportBundle {
         let didStartAccessingSecurityScopedResource = fileURL.startAccessingSecurityScopedResource()
         defer {
             if didStartAccessingSecurityScopedResource {
@@ -618,22 +664,34 @@ final class LibraryStore: ObservableObject {
             }
         }
 
+        let importer = configuration.legacyImporter
         return try await Task.detached(priority: .utility) {
-            try importer.loadBooks(from: fileURL)
+            try importer.loadImportBundle(from: fileURL)
         }.value
     }
 
-    private func makeOwnedRepositoryReference(
-        from descriptor: RepositoryDescriptor,
-        savedPassword: String? = nil
-    ) -> LibraryRepositoryReference {
-        LibraryRepositoryReference(
-            id: descriptor.id,
-            name: descriptor.name,
-            role: .owner,
-            accessAccount: descriptor.accessAccount,
-            savedPassword: savedPassword
-        )
+    private func normalizeImportedLocations(_ importedLocations: [LibraryLocation]) -> [LibraryLocation] {
+        let base = importedLocations.isEmpty ? LibraryLocation.defaultLocations() : importedLocations
+        return base
+            .sorted(by: { $0.sortOrder < $1.sortOrder })
+            .enumerated()
+            .map { index, location in
+                LibraryLocation(
+                    id: location.id.trimmed.nilIfEmpty ?? UUID().uuidString,
+                    name: location.name.trimmed.nilIfEmpty ?? "地点 \(index + 1)",
+                    sortOrder: index,
+                    isVisible: location.isVisible
+                )
+            }
+    }
+
+    private func validateSelectedLocation() {
+        if let selectedLocationID,
+           visibleLocations.contains(where: { $0.id == selectedLocationID }) {
+            return
+        }
+
+        selectedLocationID = nil
     }
 
     private func persistSessionState() {
@@ -643,6 +701,5 @@ final class LibraryStore: ObservableObject {
 
     private func currentRepositoryChanged(_ repository: LibraryRepositoryReference?) {
         currentRepository = repository
-        ownedRepository = sessionState.ownedRepository
     }
 }

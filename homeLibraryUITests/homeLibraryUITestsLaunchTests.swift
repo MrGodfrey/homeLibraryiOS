@@ -25,7 +25,11 @@ final class homeLibraryUITestsLaunchTests: XCTestCase {
         app.launchEnvironment["HOME_LIBRARY_REMOTE_DRIVER"] = "memory"
         app.launch()
 
-        XCTAssertTrue(app.navigationBars["家藏万卷"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["addBookButton"].exists)
+        let createRepositoryButton = app.buttons["createOwnedRepositoryButton"].firstMatch
+        if createRepositoryButton.waitForExistence(timeout: 2) {
+            XCTAssertTrue(createRepositoryButton.isHittable)
+        } else {
+            XCTAssertTrue(app.buttons["addBookButton"].waitForExistence(timeout: 5))
+        }
     }
 }

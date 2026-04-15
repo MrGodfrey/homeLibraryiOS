@@ -16,76 +16,105 @@ nonisolated enum RepositoryRole: String, Codable, Sendable {
         case .owner:
             return "我的仓库"
         case .member:
-            return "加入的仓库"
+            return "共享仓库"
         }
     }
 }
 
-nonisolated struct RepositoryCredentials: Equatable, Codable, Sendable {
-    var account: String
-    var password: String
+nonisolated enum CloudDatabaseScope: String, Codable, Sendable {
+    case `private`
+    case shared
+
+    var title: String {
+        switch self {
+        case .private:
+            return "私人数据库"
+        case .shared:
+            return "共享数据库"
+        }
+    }
+}
+
+nonisolated enum RepositoryShareStatus: String, Codable, Sendable {
+    case notShared
+    case shared
+
+    var title: String {
+        switch self {
+        case .notShared:
+            return "尚未共享"
+        case .shared:
+            return "已开启共享"
+        }
+    }
 }
 
 nonisolated struct LibraryRepositoryReference: Identifiable, Equatable, Codable, Sendable {
     let id: String
     var name: String
     var role: RepositoryRole
-    var accessAccount: String?
-    var savedPassword: String?
+    var databaseScope: CloudDatabaseScope
+    var zoneName: String
+    var zoneOwnerName: String
+    var shareRecordName: String?
+    var shareStatus: RepositoryShareStatus
+
+    var subtitle: String {
+        switch (role, databaseScope) {
+        case (.owner, .private):
+            return "书库保存在你的 iCloud 私人数据库中，可通过系统共享邀请家人加入。"
+        case (.member, .shared):
+            return "这是别人共享给你的家庭书库。"
+        case (.owner, .shared):
+            return "你正在查看一座已共享的书库。"
+        case (.member, .private):
+            return "这是当前设备保存的私人仓库。"
+        }
+    }
+
+    var zoneIDDescription: String {
+        "\(zoneOwnerName)/\(zoneName)"
+    }
 
     var isOwner: Bool {
         role == .owner
     }
+}
 
-    var subtitle: String {
-        switch role {
-        case .owner:
-            return "由你的 CloudKit 仓库承载，其他设备可通过仓库账号密码加入。"
-        case .member:
-            return "你当前正在协作维护别人的仓库。"
-        }
-    }
-
-    var credentials: RepositoryCredentials? {
-        guard let account = accessAccount, let password = savedPassword else {
-            return nil
-        }
-
-        return RepositoryCredentials(account: account, password: password)
-    }
-
-    func updatingRole(_ role: RepositoryRole) -> LibraryRepositoryReference {
-        LibraryRepositoryReference(
-            id: id,
-            name: name,
-            role: role,
-            accessAccount: accessAccount,
-            savedPassword: savedPassword
-        )
-    }
-
-    func updatingCredentials(_ credentials: RepositoryCredentials?) -> LibraryRepositoryReference {
-        LibraryRepositoryReference(
-            id: id,
-            name: name,
-            role: role,
-            accessAccount: credentials?.account,
-            savedPassword: credentials?.password
-        )
-    }
+nonisolated struct RemoteRepositorySnapshot: Sendable {
+    let repository: LibraryRepositoryReference
+    let locations: [LibraryLocation]
+    let books: [RemoteBookSnapshot]
 }
 
 nonisolated struct LibrarySessionState: Equatable, Codable, Sendable {
-    var ownerProfileID: String
-    var ownedRepository: LibraryRepositoryReference?
     var currentRepository: LibraryRepositoryReference?
 
-    nonisolated static func makeNew(ownerProfileID: String = UUID().uuidString) -> LibrarySessionState {
-        LibrarySessionState(
-            ownerProfileID: ownerProfileID,
-            ownedRepository: nil,
-            currentRepository: nil
-        )
+    nonisolated static func makeNew() -> LibrarySessionState {
+        LibrarySessionState(currentRepository: nil)
+    }
+}
+
+nonisolated struct RepositoryImportProgress: Equatable, Sendable {
+    enum Phase: String, Equatable, Sendable {
+        case counting
+        case importing
+        case completed
+    }
+
+    let phase: Phase
+    let totalCount: Int
+    let importedCount: Int
+
+    var statusText: String {
+        switch phase {
+        case .counting:
+            return "正在统计导入内容..."
+        case .importing:
+            return "已导入 \(importedCount) / \(totalCount)"
+        case .completed:
+            return "导入完成，共 \(totalCount) 本"
+        }
     }
 }
 
@@ -104,7 +133,7 @@ nonisolated struct RepositorySessionStore: Sendable {
             return state
         }
 
-        return .makeNew(ownerProfileID: loadOrCreateOwnerProfileID(userDefaults: userDefaults))
+        return .makeNew()
     }
 
     nonisolated func save(_ state: LibrarySessionState, userDefaults: UserDefaults = .standard) {
@@ -113,8 +142,6 @@ nonisolated struct RepositorySessionStore: Sendable {
         if let data = try? encoder.encode(state) {
             userDefaults.set(data, forKey: key("session"))
         }
-
-        userDefaults.set(state.ownerProfileID, forKey: key("ownerProfileID"))
     }
 
     nonisolated func markLegacyMigrationCompleted(
@@ -129,16 +156,6 @@ nonisolated struct RepositorySessionStore: Sendable {
         userDefaults: UserDefaults = .standard
     ) -> Bool {
         userDefaults.bool(forKey: key("migration.\(repositoryID)"))
-    }
-
-    nonisolated private func loadOrCreateOwnerProfileID(userDefaults: UserDefaults) -> String {
-        if let existingValue = userDefaults.string(forKey: key("ownerProfileID"))?.trimmed.nilIfEmpty {
-            return existingValue
-        }
-
-        let newValue = UUID().uuidString
-        userDefaults.set(newValue, forKey: key("ownerProfileID"))
-        return newValue
     }
 
     nonisolated private func key(_ suffix: String) -> String {

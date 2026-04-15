@@ -10,34 +10,54 @@ import UIKit
 
 typealias PlatformImage = UIImage
 
-nonisolated enum BookLocation: String, CaseIterable, Codable, Identifiable, Sendable {
-    case chengdu = "成都"
-    case chongqing = "重庆"
+nonisolated struct LibraryLocation: Identifiable, Hashable, Codable, Sendable {
+    let id: String
+    var name: String
+    var sortOrder: Int
+    var isVisible: Bool
 
-    var id: String { rawValue }
+    nonisolated init(
+        id: String = UUID().uuidString,
+        name: String,
+        sortOrder: Int,
+        isVisible: Bool = true
+    ) {
+        self.id = id
+        self.name = name
+        self.sortOrder = sortOrder
+        self.isVisible = isVisible
+    }
+
+    nonisolated static func defaultLocations() -> [LibraryLocation] {
+        [
+            LibraryLocation(id: "location.chengdu", name: "成都", sortOrder: 0),
+            LibraryLocation(id: "location.chongqing", name: "重庆", sortOrder: 1)
+        ]
+    }
 }
 
-nonisolated enum LibraryFilterTab: String, CaseIterable, Identifiable, Sendable {
-    case all = "全部"
-    case chengdu = "成都"
-    case chongqing = "重庆"
+nonisolated struct LibraryLocationFilter: Identifiable, Hashable, Sendable {
+    let id: String
+    let title: String
+    let locationID: String?
 
-    var id: String { rawValue }
+    nonisolated static let all = LibraryLocationFilter(id: "all", title: "全部", locationID: nil)
 
-    var location: BookLocation? {
-        switch self {
-        case .all:
-            return nil
-        case .chengdu:
-            return .chengdu
-        case .chongqing:
-            return .chongqing
-        }
+    nonisolated init(id: String, title: String, locationID: String?) {
+        self.id = id
+        self.title = title
+        self.locationID = locationID
+    }
+
+    nonisolated init(location: LibraryLocation) {
+        self.id = location.id
+        self.title = location.name
+        self.locationID = location.id
     }
 }
 
 nonisolated struct BookPayload: Hashable, Codable, Sendable {
-    nonisolated static let currentSchemaVersion = 1
+    nonisolated static let currentSchemaVersion = 2
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion
@@ -45,6 +65,7 @@ nonisolated struct BookPayload: Hashable, Codable, Sendable {
         case author
         case publisher
         case year
+        case locationID
         case location
         case customFields
         case isbn
@@ -55,7 +76,7 @@ nonisolated struct BookPayload: Hashable, Codable, Sendable {
     var author: String
     var publisher: String
     var year: String
-    var location: BookLocation
+    var locationID: String
     var customFields: [String: String]
 
     nonisolated init(
@@ -64,7 +85,7 @@ nonisolated struct BookPayload: Hashable, Codable, Sendable {
         author: String = "",
         publisher: String = "",
         year: String = "",
-        location: BookLocation,
+        locationID: String,
         customFields: [String: String] = [:]
     ) {
         self.schemaVersion = schemaVersion
@@ -72,18 +93,24 @@ nonisolated struct BookPayload: Hashable, Codable, Sendable {
         self.author = author
         self.publisher = publisher
         self.year = year
-        self.location = location
+        self.locationID = locationID
         self.customFields = customFields
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? Self.currentSchemaVersion
+        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
         title = try container.decode(String.self, forKey: .title)
         author = try container.decodeIfPresent(String.self, forKey: .author) ?? ""
         publisher = try container.decodeIfPresent(String.self, forKey: .publisher) ?? ""
         year = try container.decodeIfPresent(String.self, forKey: .year) ?? ""
-        location = try container.decode(BookLocation.self, forKey: .location)
+
+        if let locationID = try container.decodeIfPresent(String.self, forKey: .locationID)?.trimmed.nilIfEmpty {
+            self.locationID = locationID
+        } else {
+            let legacyLocation = try container.decodeIfPresent(String.self, forKey: .location)?.trimmed.nilIfEmpty ?? ""
+            self.locationID = Self.makeLocationID(fromLegacyName: legacyLocation)
+        }
 
         var resolvedCustomFields = try container.decodeIfPresent([String: String].self, forKey: .customFields) ?? [:]
         if let isbn = try container.decodeIfPresent(String.self, forKey: .isbn)?.trimmed.nilIfEmpty,
@@ -100,8 +127,19 @@ nonisolated struct BookPayload: Hashable, Codable, Sendable {
         try container.encode(author, forKey: .author)
         try container.encode(publisher, forKey: .publisher)
         try container.encode(year, forKey: .year)
-        try container.encode(location, forKey: .location)
+        try container.encode(locationID, forKey: .locationID)
         try container.encode(customFields, forKey: .customFields)
+    }
+
+    nonisolated static func makeLocationID(fromLegacyName name: String) -> String {
+        switch name {
+        case "成都":
+            return "location.chengdu"
+        case "重庆":
+            return "location.chongqing"
+        default:
+            return "location.legacy.\(name.trimmed.nilIfEmpty ?? "unknown")"
+        }
     }
 }
 
@@ -112,6 +150,7 @@ nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
         case author
         case publisher
         case year
+        case locationID
         case location
         case customFields
         case coverAssetID
@@ -125,7 +164,7 @@ nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
     var author: String
     var publisher: String
     var year: String
-    var location: BookLocation
+    var locationID: String
     var customFields: [String: String]
     var coverAssetID: String?
     var createdAt: Date
@@ -137,7 +176,7 @@ nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
         author: String = "",
         publisher: String = "",
         year: String = "",
-        location: BookLocation,
+        locationID: String,
         customFields: [String: String] = [:],
         coverAssetID: String? = nil,
         createdAt: Date = .now,
@@ -148,7 +187,7 @@ nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
         self.author = author
         self.publisher = publisher
         self.year = year
-        self.location = location
+        self.locationID = locationID
         self.customFields = customFields
         self.coverAssetID = coverAssetID
         self.createdAt = createdAt
@@ -162,7 +201,13 @@ nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
         author = try container.decodeIfPresent(String.self, forKey: .author) ?? ""
         publisher = try container.decodeIfPresent(String.self, forKey: .publisher) ?? ""
         year = try container.decodeIfPresent(String.self, forKey: .year) ?? ""
-        location = try container.decode(BookLocation.self, forKey: .location)
+
+        if let locationID = try container.decodeIfPresent(String.self, forKey: .locationID)?.trimmed.nilIfEmpty {
+            self.locationID = locationID
+        } else {
+            let legacyLocation = try container.decodeIfPresent(String.self, forKey: .location)?.trimmed.nilIfEmpty ?? ""
+            self.locationID = BookPayload.makeLocationID(fromLegacyName: legacyLocation)
+        }
 
         var resolvedCustomFields = try container.decodeIfPresent([String: String].self, forKey: .customFields) ?? [:]
         if let isbn = try container.decodeIfPresent(String.self, forKey: .isbn)?.trimmed.nilIfEmpty,
@@ -183,7 +228,7 @@ nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
         try container.encode(author, forKey: .author)
         try container.encode(publisher, forKey: .publisher)
         try container.encode(year, forKey: .year)
-        try container.encode(location, forKey: .location)
+        try container.encode(locationID, forKey: .locationID)
         try container.encode(customFields, forKey: .customFields)
         try container.encodeIfPresent(coverAssetID, forKey: .coverAssetID)
         try container.encode(createdAt, forKey: .createdAt)
@@ -203,7 +248,7 @@ nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
             author: payload.author,
             publisher: payload.publisher,
             year: payload.year,
-            location: payload.location,
+            locationID: payload.locationID,
             customFields: payload.customFields,
             coverAssetID: coverAssetID,
             createdAt: createdAt,
@@ -217,7 +262,7 @@ nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
             author: author,
             publisher: publisher,
             year: year,
-            location: location,
+            locationID: locationID,
             customFields: customFields
         )
     }
@@ -236,13 +281,17 @@ nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
         return "\(publisherText) · \(year.trimmed)"
     }
 
-    var searchCorpus: String {
+    func locationName(in locationsByID: [String: LibraryLocation]) -> String {
+        locationsByID[locationID]?.name ?? "未分配地点"
+    }
+
+    func searchCorpus(locationName: String) -> String {
         [
             title,
             author,
             publisher,
             year,
-            location.rawValue,
+            locationName,
             customFields.values.sorted().joined(separator: " ")
         ]
         .joined(separator: " ")
@@ -250,17 +299,71 @@ nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
     }
 }
 
-nonisolated struct LegacyBook: Hashable, Codable, Sendable {
+nonisolated struct LegacyBook: Hashable, Decodable, Sendable {
     let id: String
     var title: String
     var author: String
     var publisher: String
     var year: String
     var isbn: String
-    var location: BookLocation
+    var locationName: String
     var coverData: Data?
     var createdAt: Date
     var updatedAt: Date
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case author
+        case publisher
+        case year
+        case isbn
+        case locationName
+        case location
+        case coverData
+        case createdAt
+        case updatedAt
+    }
+
+    nonisolated init(
+        id: String,
+        title: String,
+        author: String,
+        publisher: String,
+        year: String,
+        isbn: String,
+        locationName: String,
+        coverData: Data?,
+        createdAt: Date,
+        updatedAt: Date
+    ) {
+        self.id = id
+        self.title = title
+        self.author = author
+        self.publisher = publisher
+        self.year = year
+        self.isbn = isbn
+        self.locationName = locationName
+        self.coverData = coverData
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        author = try container.decodeIfPresent(String.self, forKey: .author) ?? ""
+        publisher = try container.decodeIfPresent(String.self, forKey: .publisher) ?? ""
+        year = try container.decodeIfPresent(String.self, forKey: .year) ?? ""
+        isbn = try container.decodeIfPresent(String.self, forKey: .isbn) ?? ""
+        let decodedLocationName = try container.decodeIfPresent(String.self, forKey: .locationName)
+        let decodedLegacyLocation = try container.decodeIfPresent(String.self, forKey: .location)
+        locationName = decodedLocationName ?? decodedLegacyLocation ?? "未分配地点"
+        coverData = try container.decodeIfPresent(Data.self, forKey: .coverData)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
+    }
 }
 
 nonisolated struct BookDraft: Equatable, Sendable {
@@ -268,17 +371,17 @@ nonisolated struct BookDraft: Equatable, Sendable {
     var author: String
     var publisher: String
     var year: String
-    var location: BookLocation
+    var locationID: String
     var customFields: [String: String]
     var coverData: Data?
     var keepsExistingCoverReference: Bool
 
-    init(book: Book? = nil, coverData: Data? = nil, defaultLocation: BookLocation = .chengdu) {
+    init(book: Book? = nil, coverData: Data? = nil, defaultLocationID: String) {
         title = book?.title ?? ""
         author = book?.author ?? ""
         publisher = book?.publisher ?? ""
         year = book?.year ?? ""
-        location = book?.location ?? defaultLocation
+        locationID = book?.locationID ?? defaultLocationID
         customFields = book?.customFields ?? [:]
         self.coverData = coverData
         keepsExistingCoverReference = book?.coverAssetID != nil
@@ -289,7 +392,7 @@ nonisolated struct BookDraft: Equatable, Sendable {
         author: String,
         publisher: String,
         year: String,
-        location: BookLocation,
+        locationID: String,
         customFields: [String: String] = [:],
         coverData: Data?,
         keepsExistingCoverReference: Bool = false
@@ -298,7 +401,7 @@ nonisolated struct BookDraft: Equatable, Sendable {
         self.author = author
         self.publisher = publisher
         self.year = year
-        self.location = location
+        self.locationID = locationID
         self.customFields = customFields
         self.coverData = coverData
         self.keepsExistingCoverReference = keepsExistingCoverReference
@@ -321,7 +424,7 @@ nonisolated struct BookDraft: Equatable, Sendable {
             author: author.trimmed,
             publisher: publisher.trimmed,
             year: year.trimmed,
-            location: location,
+            locationID: locationID.trimmed,
             customFields: normalizedCustomFields,
             coverData: coverData,
             keepsExistingCoverReference: keepsExistingCoverReference && coverData == nil
@@ -329,17 +432,22 @@ nonisolated struct BookDraft: Equatable, Sendable {
     }
 
     var canSave: Bool {
-        !title.trimmed.isEmpty
+        !title.trimmed.isEmpty && !locationID.trimmed.isEmpty
     }
 }
 
 nonisolated enum LibraryFilter {
-    static func filteredBooks(from books: [Book], query: String, tab: LibraryFilterTab) -> [Book] {
+    static func filteredBooks(
+        from books: [Book],
+        query: String,
+        selectedLocationID: String?,
+        locationsByID: [String: LibraryLocation]
+    ) -> [Book] {
         let keyword = query.trimmed.lowercased()
 
         return books
             .filter { book in
-                let matchesLocation = tab.location == nil || book.location == tab.location
+                let matchesLocation = selectedLocationID == nil || book.locationID == selectedLocationID
 
                 guard matchesLocation else {
                     return false
@@ -349,7 +457,8 @@ nonisolated enum LibraryFilter {
                     return true
                 }
 
-                return book.searchCorpus.contains(keyword)
+                let locationName = book.locationName(in: locationsByID)
+                return book.searchCorpus(locationName: locationName).contains(keyword)
             }
             .sorted { left, right in
                 if left.updatedAt != right.updatedAt {

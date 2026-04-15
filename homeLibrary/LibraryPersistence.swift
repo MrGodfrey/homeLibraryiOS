@@ -59,7 +59,7 @@ enum LibraryJSONCodec {
 }
 
 nonisolated struct LibraryCacheManifest: Codable, Equatable, Sendable {
-    nonisolated static let currentSchemaVersion = 1
+    nonisolated static let currentSchemaVersion = 2
 
     var schemaVersion: Int
     var repositoryID: String
@@ -75,10 +75,15 @@ nonisolated struct LibraryCacheManifest: Codable, Equatable, Sendable {
 }
 
 nonisolated struct LibraryCacheSnapshot: Sendable {
+    let locations: [LibraryLocation]
     let books: [Book]
 
     nonisolated var referencedAssetIDs: Set<String> {
         Set(books.compactMap(\.coverAssetID))
+    }
+
+    nonisolated var locationsByID: [String: LibraryLocation] {
+        Dictionary(uniqueKeysWithValues: locations.map { ($0.id, $0) })
     }
 }
 
@@ -87,29 +92,148 @@ nonisolated struct LegacyImportedBook: Sendable {
     let coverData: Data?
 }
 
-nonisolated struct SeedImportPackage: Codable, Sendable {
-    nonisolated static let currentSchemaVersion = 1
+nonisolated struct LegacyImportBundle: Sendable {
+    let locations: [LibraryLocation]
+    let books: [LegacyImportedBook]
+}
+
+nonisolated struct LibraryImportPackage: Codable, Sendable {
+    nonisolated static let currentSchemaVersion = 2
 
     var schemaVersion: Int
     var source: String?
     var exportedAt: Date?
-    var books: [SeedImportBook]
+    var locations: [LibraryImportLocation]
+    var books: [LibraryImportBook]
 }
 
-nonisolated struct SeedImportBook: Codable, Sendable {
+nonisolated struct LibraryImportLocation: Codable, Sendable {
+    var id: String
+    var name: String
+    var sortOrder: Int
+    var isVisible: Bool
+
+    init(location: LibraryLocation) {
+        id = location.id
+        name = location.name
+        sortOrder = location.sortOrder
+        isVisible = location.isVisible
+    }
+
+    nonisolated func makeLocation() -> LibraryLocation {
+        LibraryLocation(id: id, name: name, sortOrder: sortOrder, isVisible: isVisible)
+    }
+}
+
+nonisolated struct LibraryImportBook: Codable, Sendable {
     var id: String
     var title: String
     var author: String
     var publisher: String
     var year: String
-    var location: BookLocation
+    var locationID: String?
+    var locationName: String?
     var customFields: [String: String]
     var isbn: String?
     var coverData: Data?
     var createdAt: Date
     var updatedAt: Date
 
-    nonisolated func makeImportedBook() -> LegacyImportedBook {
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case author
+        case publisher
+        case year
+        case locationID
+        case locationName
+        case location
+        case customFields
+        case isbn
+        case coverData
+        case createdAt
+        case updatedAt
+    }
+
+    init(
+        id: String,
+        title: String,
+        author: String,
+        publisher: String,
+        year: String,
+        locationID: String?,
+        locationName: String?,
+        customFields: [String: String],
+        isbn: String?,
+        coverData: Data?,
+        createdAt: Date,
+        updatedAt: Date
+    ) {
+        self.id = id
+        self.title = title
+        self.author = author
+        self.publisher = publisher
+        self.year = year
+        self.locationID = locationID
+        self.locationName = locationName
+        self.customFields = customFields
+        self.isbn = isbn
+        self.coverData = coverData
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        author = try container.decodeIfPresent(String.self, forKey: .author) ?? ""
+        publisher = try container.decodeIfPresent(String.self, forKey: .publisher) ?? ""
+        year = try container.decodeIfPresent(String.self, forKey: .year) ?? ""
+        locationID = try container.decodeIfPresent(String.self, forKey: .locationID)
+        let decodedLocationName = try container.decodeIfPresent(String.self, forKey: .locationName)
+        let decodedLegacyLocation = try container.decodeIfPresent(String.self, forKey: .location)
+        locationName = decodedLocationName ?? decodedLegacyLocation
+        customFields = try container.decodeIfPresent([String: String].self, forKey: .customFields) ?? [:]
+        isbn = try container.decodeIfPresent(String.self, forKey: .isbn)
+        coverData = try container.decodeIfPresent(Data.self, forKey: .coverData)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(author, forKey: .author)
+        try container.encode(publisher, forKey: .publisher)
+        try container.encode(year, forKey: .year)
+        try container.encodeIfPresent(locationID, forKey: .locationID)
+        try container.encodeIfPresent(locationName, forKey: .locationName)
+        try container.encode(customFields, forKey: .customFields)
+        try container.encodeIfPresent(isbn, forKey: .isbn)
+        try container.encodeIfPresent(coverData, forKey: .coverData)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
+    }
+
+    init(book: Book, coverData: Data?, locationsByID: [String: LibraryLocation]) {
+        id = book.id
+        title = book.title
+        author = book.author
+        publisher = book.publisher
+        year = book.year
+        locationID = book.locationID
+        locationName = locationsByID[book.locationID]?.name
+        customFields = book.customFields
+        isbn = book.customFields["ISBN"]
+        self.coverData = coverData
+        createdAt = book.createdAt
+        updatedAt = book.updatedAt
+    }
+
+    nonisolated func makeImportedBook(using locations: [LibraryLocation]) -> LegacyImportedBook {
+        let resolvedLocationID = resolveLocationID(using: locations)
         var mergedCustomFields = customFields
 
         if let isbn, !isbn.trimmed.isEmpty, mergedCustomFields["ISBN"]?.nilIfEmpty == nil {
@@ -122,13 +246,26 @@ nonisolated struct SeedImportBook: Codable, Sendable {
             author: author,
             publisher: publisher,
             year: year,
-            location: location,
+            locationID: resolvedLocationID,
             customFields: mergedCustomFields,
             createdAt: createdAt,
             updatedAt: updatedAt
         )
 
         return LegacyImportedBook(book: book, coverData: coverData)
+    }
+
+    nonisolated func resolveLocationID(using locations: [LibraryLocation]) -> String {
+        if let locationID, locations.contains(where: { $0.id == locationID }) {
+            return locationID
+        }
+
+        if let locationName = locationName?.trimmed.nilIfEmpty,
+           let matchedLocation = locations.first(where: { $0.name == locationName }) {
+            return matchedLocation.id
+        }
+
+        return locations.sorted(by: { $0.sortOrder < $1.sortOrder }).first?.id ?? LibraryLocation.defaultLocations()[0].id
     }
 }
 
@@ -146,6 +283,11 @@ nonisolated struct LibraryCacheStore: Sendable {
         if try readManifest(for: repositoryID) == nil {
             try writeManifest(.makeNew(repositoryID: repositoryID), for: repositoryID)
         }
+
+        if !FileManager.default.fileExists(atPath: locationsURL(for: repositoryID).path) {
+            let data = try LibraryJSONCodec.makeEncoder().encode(LibraryLocation.defaultLocations())
+            try data.write(to: locationsURL(for: repositoryID), options: [.atomic])
+        }
     }
 
     nonisolated func loadSnapshot(repositoryID: String) throws -> LibraryCacheSnapshot {
@@ -160,7 +302,9 @@ nonisolated struct LibraryCacheStore: Sendable {
                 return left.createdAt > right.createdAt
             }
 
-        return LibraryCacheSnapshot(books: books)
+        let locations = try loadLocations(repositoryID: repositoryID)
+
+        return LibraryCacheSnapshot(locations: locations, books: books)
     }
 
     @discardableResult
@@ -176,8 +320,9 @@ nonisolated struct LibraryCacheStore: Sendable {
         return storedBook
     }
 
-    nonisolated func replaceAllBooks(
-        _ books: [Book],
+    nonisolated func replaceAllContent(
+        books: [Book],
+        locations: [LibraryLocation],
         coverDataByAssetID: [String: Data],
         repositoryID: String,
         synchronizedAt: Date?
@@ -185,6 +330,7 @@ nonisolated struct LibraryCacheStore: Sendable {
         try prepareForUse(repositoryID: repositoryID)
 
         try resetBooksDirectory(for: repositoryID)
+        try saveLocations(locations, repositoryID: repositoryID)
 
         for book in books {
             if let assetID = book.coverAssetID, let data = coverDataByAssetID[assetID] {
@@ -199,6 +345,50 @@ nonisolated struct LibraryCacheStore: Sendable {
             manifest.lastSuccessfulSyncAt = synchronizedAt
         }
         try garbageCollectAssets(repositoryID: repositoryID)
+    }
+
+    nonisolated func loadLocations(repositoryID: String) throws -> [LibraryLocation] {
+        try prepareForUse(repositoryID: repositoryID)
+
+        let url = locationsURL(for: repositoryID)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return LibraryLocation.defaultLocations()
+        }
+
+        let data = try Data(contentsOf: url)
+        let decoder = LibraryJSONCodec.makeDecoder()
+        return try decoder.decode([LibraryLocation].self, from: data)
+            .sorted { left, right in
+                if left.sortOrder != right.sortOrder {
+                    return left.sortOrder < right.sortOrder
+                }
+
+                return left.name < right.name
+            }
+    }
+
+    nonisolated func saveLocations(_ locations: [LibraryLocation], repositoryID: String) throws {
+        try prepareForUse(repositoryID: repositoryID)
+        let normalizedLocations = locations
+            .sorted { left, right in
+                if left.sortOrder != right.sortOrder {
+                    return left.sortOrder < right.sortOrder
+                }
+
+                return left.name < right.name
+            }
+            .enumerated()
+            .map { index, location in
+                LibraryLocation(
+                    id: location.id,
+                    name: location.name.trimmed,
+                    sortOrder: index,
+                    isVisible: location.isVisible
+                )
+            }
+
+        let data = try LibraryJSONCodec.makeEncoder().encode(normalizedLocations)
+        try data.write(to: locationsURL(for: repositoryID), options: [.atomic])
     }
 
     nonisolated func removeBook(id: String, repositoryID: String) throws {
@@ -243,6 +433,30 @@ nonisolated struct LibraryCacheStore: Sendable {
         }
 
         return assetID
+    }
+
+    nonisolated func makeImportPackage(repositoryID: String, source: String?) throws -> LibraryImportPackage {
+        let snapshot = try loadSnapshot(repositoryID: repositoryID)
+        let locationsByID = snapshot.locationsByID
+
+        let books = try snapshot.books.map { book in
+            let resolvedCoverData: Data?
+            if let assetID = book.coverAssetID {
+                resolvedCoverData = try coverData(for: assetID, repositoryID: repositoryID)
+            } else {
+                resolvedCoverData = nil
+            }
+
+            return LibraryImportBook(book: book, coverData: resolvedCoverData, locationsByID: locationsByID)
+        }
+
+        return LibraryImportPackage(
+            schemaVersion: LibraryImportPackage.currentSchemaVersion,
+            source: source,
+            exportedAt: .now,
+            locations: snapshot.locations.map(LibraryImportLocation.init(location:)),
+            books: books
+        )
     }
 
     nonisolated private func readManifest(for repositoryID: String) throws -> LibraryCacheManifest? {
@@ -329,6 +543,10 @@ nonisolated struct LibraryCacheStore: Sendable {
         repositoryRootURL(for: repositoryID).appendingPathComponent("manifest.json")
     }
 
+    nonisolated private func locationsURL(for repositoryID: String) -> URL {
+        repositoryRootURL(for: repositoryID).appendingPathComponent("locations.json")
+    }
+
     nonisolated private func bookRecordURL(for bookID: String, repositoryID: String) -> URL {
         booksDirectoryURL(for: repositoryID).appendingPathComponent("\(bookID).json")
     }
@@ -381,7 +599,7 @@ nonisolated struct LegacyLibraryImporter: Sendable {
         self.storageRootURL = storageRootURL
     }
 
-    nonisolated func loadBooks() throws -> [LegacyImportedBook] {
+    nonisolated func loadImportBundle() throws -> LegacyImportBundle {
         if try hasStructuredRecords() {
             return try loadStructuredBooks()
         }
@@ -391,14 +609,33 @@ nonisolated struct LegacyLibraryImporter: Sendable {
         }
 
         if let seedImportURL = firstExistingImportURL(in: [storageRootURL]) {
-            return try loadSeedBooksJSON(from: seedImportURL)
+            return try loadImportBundle(from: seedImportURL)
         }
 
-        return []
+        return LegacyImportBundle(locations: LibraryLocation.defaultLocations(), books: [])
     }
 
-    nonisolated func loadBooks(from importFileURL: URL) throws -> [LegacyImportedBook] {
-        try loadSeedBooksJSON(from: importFileURL)
+    nonisolated func loadImportBundle(from importFileURL: URL) throws -> LegacyImportBundle {
+        let data = try Data(contentsOf: importFileURL)
+
+        guard !data.isEmpty else {
+            return LegacyImportBundle(locations: LibraryLocation.defaultLocations(), books: [])
+        }
+
+        let decoder = LibraryJSONCodec.makeDecoder()
+        if let package = try? decoder.decode(LibraryImportPackage.self, from: data) {
+            let locations = package.locations.map { $0.makeLocation() }
+            let normalizedLocations = locations.isEmpty ? LibraryLocation.defaultLocations() : locations
+            let books = package.books.map { $0.makeImportedBook(using: normalizedLocations) }
+            return LegacyImportBundle(locations: normalizedLocations, books: books)
+        }
+
+        if let legacyBooks = try? decoder.decode([LegacyBook].self, from: data) {
+            let locations = Self.locations(from: legacyBooks.map(\.locationName))
+            return LegacyImportBundle(locations: locations, books: legacyBooks.map { Self.makeImportedBook(from: $0, using: locations) })
+        }
+
+        throw CocoaError(.fileReadCorruptFile)
     }
 
     nonisolated func cleanupAfterMigration() throws {
@@ -407,6 +644,7 @@ nonisolated struct LegacyLibraryImporter: Sendable {
             storageRootURL.appendingPathComponent("covers", isDirectory: true),
             storageRootURL.appendingPathComponent("deletions", isDirectory: true),
             storageRootURL.appendingPathComponent("manifest.json"),
+            storageRootURL.appendingPathComponent("locations.json"),
             legacyBooksJSONURL,
             storageRootURL.appendingPathComponent("SeedBooks.json"),
             storageRootURL.appendingPathComponent("LibraryImport.json"),
@@ -435,7 +673,7 @@ nonisolated struct LegacyLibraryImporter: Sendable {
         ).isEmpty
     }
 
-    nonisolated private func loadStructuredBooks() throws -> [LegacyImportedBook] {
+    nonisolated private func loadStructuredBooks() throws -> LegacyImportBundle {
         let booksDirectoryURL = storageRootURL.appendingPathComponent("books", isDirectory: true)
         let coversDirectoryURL = storageRootURL.appendingPathComponent("covers", isDirectory: true)
         let deletionsDirectoryURL = storageRootURL.appendingPathComponent("deletions", isDirectory: true)
@@ -461,6 +699,7 @@ nonisolated struct LegacyLibraryImporter: Sendable {
         .filter { $0.pathExtension == "json" }
 
         var importedBooks: [LegacyImportedBook] = []
+        var locationNames: [String] = []
 
         for url in bookURLs {
             let data = try Data(contentsOf: url)
@@ -475,10 +714,12 @@ nonisolated struct LegacyLibraryImporter: Sendable {
                 continue
             }
 
+            locationNames.append(book.locationID)
             importedBooks.append(importedBook)
         }
 
-        return importedBooks
+        let locations = deduplicateLocationsFromStructuredBooks(importedBooks)
+        return LegacyImportBundle(locations: locations, books: importedBooks)
     }
 
     nonisolated private func decodeStructuredImportedBook(
@@ -490,14 +731,12 @@ nonisolated struct LegacyLibraryImporter: Sendable {
 
         do {
             let book = try decoder.decode(Book.self, from: data)
-            let coverData = try coverData(
-                for: book.coverAssetID,
-                in: coversDirectoryURL
-            ) ?? legacyBook?.coverData
+            let coverData = try coverData(for: book.coverAssetID, in: coversDirectoryURL) ?? legacyBook?.coverData
             return LegacyImportedBook(book: book, coverData: coverData)
         } catch {
             if let legacyBook {
-                return makeImportedBook(from: legacyBook)
+                let locations = Self.locations(from: [legacyBook.locationName])
+                return Self.makeImportedBook(from: legacyBook, using: locations)
             }
 
             throw error
@@ -517,37 +756,17 @@ nonisolated struct LegacyLibraryImporter: Sendable {
         return try Data(contentsOf: assetURL)
     }
 
-    nonisolated private func loadLegacyBooksJSON() throws -> [LegacyImportedBook] {
+    nonisolated private func loadLegacyBooksJSON() throws -> LegacyImportBundle {
         let data = try Data(contentsOf: legacyBooksJSONURL)
 
         guard !data.isEmpty else {
-            return []
+            return LegacyImportBundle(locations: LibraryLocation.defaultLocations(), books: [])
         }
 
         let decoder = LibraryJSONCodec.makeDecoder()
         let legacyBooks = try decoder.decode([LegacyBook].self, from: data)
-
-        return legacyBooks.map(makeImportedBook(from:))
-    }
-
-    nonisolated private func loadSeedBooksJSON(from url: URL) throws -> [LegacyImportedBook] {
-        let data = try Data(contentsOf: url)
-
-        guard !data.isEmpty else {
-            return []
-        }
-
-        let packageDecoder = LibraryJSONCodec.makeDecoder()
-        if let package = try? packageDecoder.decode(SeedImportPackage.self, from: data) {
-            return package.books.map { $0.makeImportedBook() }
-        }
-
-        let legacyDecoder = LibraryJSONCodec.makeDecoder()
-        if let legacyBooks = try? legacyDecoder.decode([LegacyBook].self, from: data) {
-            return legacyBooks.map(makeImportedBook(from:))
-        }
-
-        throw CocoaError(.fileReadCorruptFile)
+        let locations = Self.locations(from: legacyBooks.map(\.locationName))
+        return LegacyImportBundle(locations: locations, books: legacyBooks.map { Self.makeImportedBook(from: $0, using: locations) })
     }
 
     nonisolated private func firstExistingImportURL(in directories: [URL]) -> URL? {
@@ -568,12 +787,47 @@ nonisolated struct LegacyLibraryImporter: Sendable {
         return nil
     }
 
-    nonisolated private func makeImportedBook(from legacyBook: LegacyBook) -> LegacyImportedBook {
+    nonisolated private func deduplicateLocationsFromStructuredBooks(_ books: [LegacyImportedBook]) -> [LibraryLocation] {
+        let locationIDs = Set(books.map { $0.book.locationID })
+        let defaults = LibraryLocation.defaultLocations()
+        let remaining = locationIDs.subtracting(defaults.map(\.id))
+        let extra = remaining.sorted().enumerated().map { index, locationID in
+            LibraryLocation(id: locationID, name: locationID.replacingOccurrences(of: "location.legacy.", with: ""), sortOrder: defaults.count + index)
+        }
+        return defaults + extra
+    }
+
+    nonisolated private static func locations(from names: [String]) -> [LibraryLocation] {
+        let normalizedNames = names
+            .map(\.trimmed)
+            .filter { !$0.isEmpty }
+
+        guard !normalizedNames.isEmpty else {
+            return LibraryLocation.defaultLocations()
+        }
+
+        let uniqueNames = Array(NSOrderedSet(array: normalizedNames)) as? [String] ?? normalizedNames
+        return uniqueNames.enumerated().map { index, name in
+            LibraryLocation(
+                id: BookPayload.makeLocationID(fromLegacyName: name),
+                name: name,
+                sortOrder: index
+            )
+        }
+    }
+
+    nonisolated private static func makeImportedBook(
+        from legacyBook: LegacyBook,
+        using locations: [LibraryLocation]
+    ) -> LegacyImportedBook {
         var customFields: [String: String] = [:]
 
         if !legacyBook.isbn.trimmed.isEmpty {
             customFields["ISBN"] = legacyBook.isbn.trimmed
         }
+
+        let locationID = locations.first(where: { $0.name == legacyBook.locationName })?.id
+            ?? BookPayload.makeLocationID(fromLegacyName: legacyBook.locationName)
 
         let book = Book(
             id: legacyBook.id,
@@ -581,12 +835,108 @@ nonisolated struct LegacyLibraryImporter: Sendable {
             author: legacyBook.author,
             publisher: legacyBook.publisher,
             year: legacyBook.year,
-            location: legacyBook.location,
+            locationID: locationID,
             customFields: customFields,
             createdAt: legacyBook.createdAt,
             updatedAt: legacyBook.updatedAt
         )
 
         return LegacyImportedBook(book: book, coverData: legacyBook.coverData)
+    }
+}
+
+enum LibraryZipArchiveWriter {
+    nonisolated static func writeSingleFileArchive(filename: String, fileData: Data, to url: URL) throws {
+        let filenameData = Data(filename.utf8)
+        let crc = CRC32.checksum(fileData)
+        let compressedSize = UInt32(fileData.count)
+        let uncompressedSize = UInt32(fileData.count)
+        let localHeaderOffset = UInt32(0)
+
+        var archive = Data()
+        archive.append(uint32: 0x04034b50)
+        archive.append(uint16: 20)
+        archive.append(uint16: 0)
+        archive.append(uint16: 0)
+        archive.append(uint16: 0)
+        archive.append(uint16: 0)
+        archive.append(uint32: crc)
+        archive.append(uint32: compressedSize)
+        archive.append(uint32: uncompressedSize)
+        archive.append(uint16: UInt16(filenameData.count))
+        archive.append(uint16: 0)
+        archive.append(filenameData)
+        archive.append(fileData)
+
+        let centralDirectoryOffset = UInt32(archive.count)
+        archive.append(uint32: 0x02014b50)
+        archive.append(uint16: 20)
+        archive.append(uint16: 20)
+        archive.append(uint16: 0)
+        archive.append(uint16: 0)
+        archive.append(uint16: 0)
+        archive.append(uint16: 0)
+        archive.append(uint32: crc)
+        archive.append(uint32: compressedSize)
+        archive.append(uint32: uncompressedSize)
+        archive.append(uint16: UInt16(filenameData.count))
+        archive.append(uint16: 0)
+        archive.append(uint16: 0)
+        archive.append(uint16: 0)
+        archive.append(uint16: 0)
+        archive.append(uint32: 0)
+        archive.append(uint32: localHeaderOffset)
+        archive.append(filenameData)
+
+        let centralDirectorySize = UInt32(archive.count) - centralDirectoryOffset
+        archive.append(uint32: 0x06054b50)
+        archive.append(uint16: 0)
+        archive.append(uint16: 0)
+        archive.append(uint16: 1)
+        archive.append(uint16: 1)
+        archive.append(uint32: centralDirectorySize)
+        archive.append(uint32: centralDirectoryOffset)
+        archive.append(uint16: 0)
+
+        try archive.write(to: url, options: [.atomic])
+    }
+}
+
+private enum CRC32 {
+    static let table: [UInt32] = (0..<256).map { value in
+        var current = UInt32(value)
+        for _ in 0..<8 {
+            if current & 1 == 1 {
+                current = 0xEDB88320 ^ (current >> 1)
+            } else {
+                current >>= 1
+            }
+        }
+        return current
+    }
+
+    nonisolated static func checksum(_ data: Data) -> UInt32 {
+        var crc: UInt32 = 0xFFFF_FFFF
+        for byte in data {
+            let index = Int((crc ^ UInt32(byte)) & 0xFF)
+            crc = CRC32.table[index] ^ (crc >> 8)
+        }
+        return crc ^ 0xFFFF_FFFF
+    }
+}
+
+private extension Data {
+    nonisolated mutating func append(uint16 value: UInt16) {
+        var littleEndian = value.littleEndian
+        Swift.withUnsafeBytes(of: &littleEndian) { buffer in
+            append(contentsOf: buffer)
+        }
+    }
+
+    nonisolated mutating func append(uint32 value: UInt32) {
+        var littleEndian = value.littleEndian
+        Swift.withUnsafeBytes(of: &littleEndian) { buffer in
+            append(contentsOf: buffer)
+        }
     }
 }

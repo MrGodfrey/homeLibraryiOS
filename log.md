@@ -69,3 +69,35 @@
 - `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -configuration Release -showBuildSettings` 确认 `Release` 带有同一份 entitlement
 - `Build iOS Apps / build_sim` 通过
 - `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -configuration Debug -destination 'id=00008140-00186D4A2EEB001C' build -quiet` 通过
+
+## 2026-04-15（CKShare 重构、动态地点与真网 CloudKit）
+
+- 用标准 `CKShare` 重构仓库协作：远端主线切换到“owner 私有 zone + shared database 访问”，删除仓库账号密码加入模型及相关 UI、测试和文档叙述。
+- 升级仓库模型：`LibraryRepositoryReference` 现在显式记录角色、数据库作用域、zone 标识和 share 状态；`LibraryRemoteSyncing` 改成仓库级接口。
+- 引入动态地点：新增仓库级 `LibraryLocation`，书籍改存 `locationID`，旧 `成都 / 重庆` 自动映射为默认地点配置。
+- 重做缓存与导出：仓库缓存新增 `locations.json`，导出统一为 zip，根目录写入 `LibraryImport.json` 并内嵌封面数据。
+- 重做首页：移除仓库信息面板，改为双栏书墙、顶部透明地点切换、滚动隐藏 `家藏万卷`、底部悬浮毛玻璃搜索、两段式卡片操作。
+- 重做仓库设置页：重组为“仓库信息 / 地点配置 / 高级管理区”，高级管理区固定提供旧数据迁移、清空当前仓库、导出当前仓库 zip。
+- 增加迁移进度状态：导入前统计总数，导入中展示 `已导入 x / total`，完成后更新为成功状态。
+- 接入系统共享链路：`Info.plist` 启用 `CKSharingSupported`，应用增加分享回调接收与 `CKAcceptSharesOperation` 处理。
+- 调整测试环境优先级：`HOME_LIBRARY_REMOTE_DRIVER=cloudkit` 在 XCTest 宿主下也会强制启用 CloudKit；默认测试仍保持 memory。
+- 新增 test-runner 环境变量兼容：为 host-backed 单测补充 `TEST_RUNNER_` 前缀环境变量兼容，解决 `xcodebuild`/测试运行器环境注入不一致的问题。
+- 新增 live 集成测试：`CloudKitLiveIntegrationTests` 固定在 booted `iPhone 17` 模拟器上运行，命中真实 iCloud 测试账号和 CloudKit `Development` 环境。
+- 收敛 CloudKit 主路径对 queryable index 的依赖：仓库发现改用 `databaseChanges(since:)` + 固定根记录，zone 内全量拉取改用 `recordZoneChanges(inZoneWith:since:)`，不再把旧公共库 query 索引作为主线前提。
+- 修复 CloudKit 真网问题：处理了 shared DB 不支持 zone-wide query、清空仓库时同一记录被同时保存和删除等真实运行期错误。
+- 重写 `README.md` 为需求优先结构；同步用更详细的实施版内容替换 `plan.md`。
+
+### 验证记录
+
+- `Build iOS Apps / build_sim` 通过
+- `Build iOS Apps / test_sim -only-testing:homeLibraryTests` 通过，`18` 个测试里 `17` 个通过、`1` 个 live 测试在默认路径下按预期跳过
+- `Build iOS Apps / test_sim -only-testing:homeLibraryUITests` 通过，`2` 个 UI 测试通过
+- `Build iOS Apps / test_sim` 通过，整套 `20` 个测试中 `19` 个通过、`1` 个 live 测试按预期跳过
+- `Build iOS Apps / test_sim -only-testing:homeLibraryTests/CloudKitLiveIntegrationTests` 在 `iPhone 17` 模拟器、真实 iCloud 账号、CloudKit `Development` 环境下通过
+
+### CloudKit 经验结论
+
+- 对 host-backed 单测，普通 shell 环境变量不一定会原样进入测试进程；需要通过 test-runner 环境注入，或在代码里兼容测试运行器前缀变量。
+- `sharedCloudDatabase` 不适合沿用“整库 query”的仓库发现方式，更稳妥的做法是围绕共享 zone 和固定根记录组织模型。
+- 如果 CloudKit 失败，需要尽早保留操作名、数据库作用域、zone 名和映射后的用户可见错误；否则很难分辨是网络、权限、schema 还是共享约束导致的问题。
+- `Development` 和 `Production` 不需要两套数据格式；差异在 schema 发布与数据隔离，而不在业务模型。

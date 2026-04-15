@@ -5,52 +5,32 @@
 //  Created by Codex on 2026/4/14.
 //
 
-import SwiftUI
-import UniformTypeIdentifiers
 import ImageIO
+import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var store: LibraryStore
+
     @State private var editorTarget: EditorTarget?
     @State private var pendingDeleteBook: Book?
+    @State private var selectedBookID: String?
     @State private var isShowingRepositorySheet = false
-    @State private var isShowingLegacyImportPicker = false
+    @State private var isShowingSearchField = false
+    @State private var scrollOffset: CGFloat = 0
 
     var body: some View {
-        NavigationStack {
-            content
-                .navigationTitle("家藏万卷")
-                .modifier(LibrarySearchModifier(searchText: $store.searchText, isEnabled: store.canSearch))
-                .toolbar {
-                    ToolbarItemGroup(placement: .automatic) {
-                        Button {
-                            Task {
-                                await store.loadBooks(force: true)
-                            }
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                        .accessibilityLabel("刷新")
-                        .accessibilityIdentifier("refreshButton")
+        ZStack {
+            Color(uiColor: .systemBackground)
+                .ignoresSafeArea()
 
-                        Button {
-                            isShowingRepositorySheet = true
-                        } label: {
-                            Image(systemName: "person.2.badge.gearshape")
-                        }
-                        .accessibilityLabel("仓库管理")
-                        .accessibilityIdentifier("repositoryManagementButton")
+            if store.hasRepository {
+                libraryContent
+            } else {
+                emptyRepositoryState
+            }
 
-                        Button {
-                            editorTarget = .create(defaultLocation: store.activeTab.location ?? .chengdu)
-                        } label: {
-                            Image(systemName: "plus")
-                        }
-                        .disabled(!store.hasRepository)
-                        .accessibilityLabel("添加书籍")
-                        .accessibilityIdentifier("addBookButton")
-                    }
-                }
+            topOverlay
+            bottomFloatingControls
         }
         .task {
             await store.loadBooksIfNeeded()
@@ -58,18 +38,12 @@ struct ContentView: View {
         .sheet(isPresented: $isShowingRepositorySheet) {
             RepositoryManagementView(store: store)
         }
-        .fileImporter(
-            isPresented: $isShowingLegacyImportPicker,
-            allowedContentTypes: [.json],
-            allowsMultipleSelection: false
-        ) { result in
-            handleLegacyImportSelection(result)
-        }
         .sheet(item: $editorTarget) { target in
             BookEditorView(
                 editingBook: target.book,
                 initialCoverData: target.initialCoverData,
-                defaultLocation: target.defaultLocation
+                locations: store.locations.isEmpty ? LibraryLocation.defaultLocations() : store.locations,
+                defaultLocationID: target.defaultLocationID
             ) { draft, book in
                 await store.saveBook(draft: draft, editing: book)
             }
@@ -79,9 +53,11 @@ struct ContentView: View {
                 Button("删除", role: .destructive) {
                     Task {
                         let didDelete = await store.deleteBook(pendingDeleteBook)
-
                         if didDelete {
                             self.pendingDeleteBook = nil
+                            if selectedBookID == pendingDeleteBook.id {
+                                selectedBookID = nil
+                            }
                         }
                     }
                 }
@@ -102,113 +78,320 @@ struct ContentView: View {
         }
     }
 
-    private var content: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Picker("所在地", selection: $store.activeTab) {
-                ForEach(LibraryFilterTab.allCases) { tab in
-                    Text(tab.rawValue).tag(tab)
+    private var libraryContent: some View {
+        ScrollView {
+            OffsetReader()
+
+            VStack(alignment: .leading, spacing: 16) {
+                titleBlock
+                    .padding(.top, 84)
+                    .opacity(titleOpacity)
+
+                if let importProgress = store.importProgress {
+                    progressBanner(importProgress)
                 }
-            }
-            .pickerStyle(.segmented)
-            .accessibilityIdentifier("locationPicker")
 
-            HStack(alignment: .center, spacing: 12) {
-                Text("共 \(store.visibleBooks.count) 本可见藏书")
-                    .font(.headline)
-                    .accessibilityIdentifier("visibleCountLabel")
-
-                Spacer()
-
-                SyncStatusBadge(status: store.syncStatus)
-
-                if store.isLoading {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-            }
-
-            RepositoryPanel(
-                title: store.repositoryTitle,
-                roleTitle: store.repositoryRoleTitle,
-                subtitle: store.repositorySubtitle
-            )
-
-            if store.visibleBooks.isEmpty && !store.isLoading {
-                Spacer()
-
-                if !store.hasRepository {
-                    ContentUnavailableView {
-                        Label("还没有仓库", systemImage: "books.vertical")
-                    } description: {
-                        Text("当前 iCloud 账号下没有可用仓库。你可以创建一个新仓库，或者从旧 JSON 迁移。")
-                    } actions: {
-                        Button(store.isCreatingRepository ? "创建中..." : "创建我的仓库") {
-                            Task {
-                                _ = await store.createOwnedRepository()
-                            }
-                        }
-                        .disabled(store.isCreatingRepository || store.isImportingLegacyData)
-                        .accessibilityIdentifier("createOwnedRepositoryButton")
-
-                        Button(store.isImportingLegacyData ? "导入中..." : "迁移旧数据") {
-                            isShowingLegacyImportPicker = true
-                        }
-                        .disabled(store.isCreatingRepository || store.isImportingLegacyData)
-                    }
-                    .accessibilityIdentifier("emptyState")
-                } else if hasActiveFilters {
-                    ContentUnavailableView(
-                        "当前没有匹配的书籍",
-                        systemImage: "books.vertical",
-                        description: Text("试试切换地点、搜索关键词，或者清空筛选条件。")
-                    )
-                    .accessibilityIdentifier("emptyState")
+                if store.visibleBooks.isEmpty && !store.isLoading {
+                    emptyBooksState
                 } else {
-                    ContentUnavailableView {
-                        Label("仓库还是空的", systemImage: "books.vertical")
-                    } description: {
-                        Text("你可以直接添加一本新书，或者从旧 JSON 迁移。")
-                    } actions: {
-                        Button("添加书籍") {
-                            editorTarget = .create(defaultLocation: store.activeTab.location ?? .chengdu)
-                        }
+                    booksGrid
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 140)
+        }
+        .coordinateSpace(name: "library-scroll")
+        .onPreferenceChange(ScrollOffsetPreferenceKey.self) { scrollOffset = $0 }
+        .refreshable {
+            await store.loadBooks(force: true)
+        }
+    }
 
-                        Button(store.isImportingLegacyData ? "导入中..." : "迁移旧数据") {
-                            isShowingLegacyImportPicker = true
+    private var emptyRepositoryState: some View {
+        VStack(spacing: 20) {
+            Spacer()
+
+            Text("家藏万卷")
+                .font(.system(size: 34, weight: .bold))
+
+            Text("先创建一座家庭书库，再开始录入和共享。")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+
+            Button(store.isCreatingRepository ? "创建中..." : "创建我的仓库") {
+                Task {
+                    _ = await store.createOwnedRepository()
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .accessibilityIdentifier("createOwnedRepositoryButton")
+
+            Button("仓库设置") {
+                isShowingRepositorySheet = true
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+
+            Spacer()
+        }
+        .padding(.horizontal, 20)
+    }
+
+    private var titleBlock: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("家藏万卷")
+                .font(.system(size: 34, weight: .bold))
+
+            HStack(spacing: 10) {
+                Text("\(store.visibleBooks.count) 本")
+                    .font(.subheadline.weight(.semibold))
+                SyncStatusBadge(status: store.syncStatus)
+            }
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private var booksGrid: some View {
+        LazyVGrid(
+            columns: [
+                GridItem(.flexible(minimum: 140), spacing: 12),
+                GridItem(.flexible(minimum: 140), spacing: 12)
+            ],
+            spacing: 14
+        ) {
+            ForEach(store.visibleBooks) { book in
+                LibraryBookCard(
+                    book: book,
+                    locationName: book.locationName(in: store.locationsDictionary),
+                    isSelected: selectedBookID == book.id,
+                    coverLoader: store.coverData(for:),
+                    onTap: {
+                        withAnimation(.snappy(duration: 0.2)) {
+                            selectedBookID = selectedBookID == book.id ? nil : book.id
                         }
-                        .disabled(store.isImportingLegacyData)
+                    },
+                    onEdit: {
+                        selectedBookID = nil
+                        editorTarget = .edit(
+                            book,
+                            initialCoverData: store.coverDataSynchronously(for: book.coverAssetID),
+                            defaultLocationID: book.locationID
+                        )
+                    },
+                    onDelete: {
+                        pendingDeleteBook = book
                     }
-                    .accessibilityIdentifier("emptyState")
+                )
+                .accessibilityIdentifier("bookCard-\(book.id)")
+            }
+        }
+    }
+
+    private var emptyBooksState: some View {
+        VStack(spacing: 14) {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.quaternary)
+                .frame(width: 64, height: 64)
+                .overlay {
+                    Image(systemName: "books.vertical")
+                        .font(.system(size: 26, weight: .semibold))
+                        .foregroundStyle(.secondary)
                 }
 
-                Spacer()
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ForEach(store.visibleBooks) { book in
-                            BookRowCard(
-                                book: book,
-                                coverLoader: store.coverData(for:),
-                                onEdit: {
-                                    editorTarget = .edit(
-                                        book,
-                                        initialCoverData: store.coverDataSynchronously(for: book.coverAssetID)
-                                    )
-                                },
-                                onDelete: {
-                                    pendingDeleteBook = book
+            Text(hasActiveFilters ? "当前没有匹配的书籍" : "仓库还是空的")
+                .font(.headline)
+
+            Text(hasActiveFilters ? "试试切换地点或清空搜索。" : "点击右下角的加号，先录入第一本书。")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 80)
+    }
+
+    private var topOverlay: some View {
+        VStack(spacing: 10) {
+            HStack {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(store.visibleLocationFilters) { filter in
+                            Button {
+                                withAnimation(.snappy(duration: 0.2)) {
+                                    store.selectedLocationID = filter.locationID
+                                    selectedBookID = nil
                                 }
-                            )
+                            } label: {
+                                Text(filter.title)
+                                    .font(.subheadline.weight(.semibold))
+                                    .lineLimit(1)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 9)
+                                    .foregroundStyle(isActive(filter: filter) ? Color.white : Color.primary)
+                                    .background(
+                                        Group {
+                                            if isActive(filter: filter) {
+                                                Capsule().fill(Color.primary)
+                                            } else {
+                                                Capsule().fill(Color.clear)
+                                            }
+                                        }
+                                    )
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
-                    .padding(.bottom, 12)
+                    .padding(.horizontal, 6)
                 }
-                .refreshable {
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+
+            Spacer()
+        }
+        .ignoresSafeArea(edges: .top)
+    }
+
+    private var bottomFloatingControls: some View {
+        VStack {
+            Spacer()
+
+            HStack(alignment: .bottom, spacing: 12) {
+                floatingSearch
+                Spacer()
+                floatingActions
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 18)
+        }
+    }
+
+    private var floatingSearch: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+
+            if isShowingSearchField || !store.searchText.isEmpty {
+                TextField("搜索书名、作者或出版社", text: $store.searchText)
+                    .textFieldStyle(.plain)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .accessibilityIdentifier("floatingSearchField")
+            } else {
+                Button {
+                    withAnimation(.snappy(duration: 0.2)) {
+                        isShowingSearchField = true
+                    }
+                } label: {
+                    Text("搜索")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("floatingSearchBar")
+            }
+
+            if !store.searchText.isEmpty {
+                Button {
+                    store.searchText = ""
+                    if store.searchText.isEmpty {
+                        isShowingSearchField = false
+                    }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(width: isShowingSearchField || !store.searchText.isEmpty ? 260 : 130, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var floatingActions: some View {
+        VStack(spacing: 10) {
+            floatingCircleButton(systemName: "arrow.clockwise", identifier: "refreshButton") {
+                Task {
                     await store.loadBooks(force: true)
                 }
             }
+
+            floatingCircleButton(systemName: "person.2.badge.gearshape", identifier: "repositoryManagementButton") {
+                isShowingRepositorySheet = true
+            }
+
+            floatingCircleButton(systemName: "plus", identifier: "addBookButton", prominent: true) {
+                editorTarget = .create(defaultLocationID: store.defaultLocationID)
+            }
+            .disabled(!store.hasRepository)
         }
-        .padding()
+    }
+
+    private func floatingCircleButton(
+        systemName: String,
+        identifier: String,
+        prominent: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(prominent ? Color.white : Color.primary)
+                .frame(width: 48, height: 48)
+                .background(
+                    Group {
+                        if prominent {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.primary)
+                        } else {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(.ultraThinMaterial)
+                        }
+                    }
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(identifier)
+    }
+
+    private func progressBanner(_ progress: RepositoryImportProgress) -> some View {
+        HStack(spacing: 10) {
+            if progress.phase == .importing {
+                ProgressView(value: Double(progress.importedCount), total: Double(max(progress.totalCount, 1)))
+            } else {
+                ProgressView()
+            }
+
+            Text(progress.statusText)
+                .font(.footnote.weight(.semibold))
+
+            Spacer()
+
+            if progress.phase == .completed {
+                Button("关闭") {
+                    store.dismissImportProgress()
+                }
+                .font(.footnote.weight(.semibold))
+            }
+        }
+        .padding(12)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func isActive(filter: LibraryLocationFilter) -> Bool {
+        store.selectedLocationID == filter.locationID
+    }
+
+    private var titleOpacity: Double {
+        let progress = min(max(-scrollOffset / 48, 0), 1)
+        return 1 - progress
     }
 
     private var deleteDialogBinding: Binding<Bool> {
@@ -234,62 +417,7 @@ struct ContentView: View {
     }
 
     private var hasActiveFilters: Bool {
-        !store.searchText.trimmed.isEmpty || store.activeTab != .all
-    }
-
-    private func handleLegacyImportSelection(_ result: Result<[URL], Error>) {
-        switch result {
-        case .success(let urls):
-            guard let url = urls.first else {
-                return
-            }
-
-            Task {
-                _ = await store.importLegacyJSON(from: url)
-            }
-        case .failure(let error):
-            store.alertMessage = LibraryStore.userFacingMessage(for: error)
-        }
-    }
-}
-
-private struct LibrarySearchModifier: ViewModifier {
-    @Binding var searchText: String
-    let isEnabled: Bool
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if isEnabled {
-            content.searchable(text: $searchText, prompt: "搜索书名、作者或出版社")
-        } else {
-            content
-        }
-    }
-}
-
-private struct RepositoryPanel: View {
-    let title: String
-    let roleTitle: String
-    let subtitle: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-
-            Text(roleTitle)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.tint)
-
-            Text(subtitle)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .accessibilityIdentifier("repositoryPanel")
+        !store.searchText.trimmed.isEmpty || store.selectedLocationID != nil
     }
 }
 
@@ -321,77 +449,99 @@ private struct SyncStatusBadge: View {
     }
 }
 
-private struct BookRowCard: View {
+private struct LibraryBookCard: View {
     let book: Book
+    let locationName: String
+    let isSelected: Bool
     let coverLoader: (String?) async -> Data?
+    let onTap: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            BookThumbnail(assetID: book.coverAssetID, title: book.title, coverLoader: coverLoader)
-                .frame(width: 68, height: 92)
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 10) {
+                ZStack(alignment: .bottom) {
+                    BookThumbnail(assetID: book.coverAssetID, title: book.title, coverLoader: coverLoader)
+                        .aspectRatio(0.68, contentMode: .fit)
+                        .frame(maxWidth: .infinity)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay {
+                            if isSelected {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(Color.black.opacity(0.38))
+                            }
+                        }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text(book.title)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
-
-                Text(book.displayAuthor)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-
-                Text(book.displayPublisherLine)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-
-                Text(book.location.rawValue)
-                    .font(.caption.weight(.bold))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(locationTint.opacity(0.16), in: Capsule())
-                    .foregroundStyle(locationTint)
-            }
-
-            Spacer(minLength: 12)
-
-            VStack(spacing: 10) {
-                Button(action: onEdit) {
-                    Image(systemName: "pencil")
-                        .frame(width: 36, height: 36)
-                        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    if isSelected {
+                        HStack(spacing: 10) {
+                            actionPill(
+                                title: "修改",
+                                systemName: "pencil",
+                                tint: .white,
+                                background: .blue,
+                                accessibilityIdentifier: "editBook-\(book.id)",
+                                action: onEdit
+                            )
+                            actionPill(
+                                title: "删除",
+                                systemName: "trash",
+                                tint: .white,
+                                background: .red,
+                                accessibilityIdentifier: "deleteBook-\(book.id)",
+                                action: onDelete
+                            )
+                        }
+                        .padding(10)
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("编辑 \(book.title)")
-                .accessibilityIdentifier("editBook-\(book.id)")
 
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "trash")
-                        .frame(width: 36, height: 36)
-                        .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(book.title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+
+                    Text(book.displayAuthor)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+
+                    Text(book.displayPublisherLine)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+
+                    Text(locationName)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("删除 \(book.title)")
-                .accessibilityIdentifier("deleteBook-\(book.id)")
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .padding(12)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .contentShape(Rectangle())
-        .accessibilityIdentifier("bookRow-\(book.id)")
+        .buttonStyle(.plain)
     }
 
-    private var locationTint: Color {
-        switch book.location {
-        case .chengdu:
-            return .blue
-        case .chongqing:
-            return .orange
+    private func actionPill(
+        title: String,
+        systemName: String,
+        tint: Color,
+        background: Color,
+        accessibilityIdentifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemName)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .foregroundStyle(tint)
+                .background(background.opacity(0.92), in: Capsule())
         }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(accessibilityIdentifier)
     }
 }
 
@@ -405,18 +555,18 @@ private struct BookThumbnail: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.secondary.opacity(0.08))
 
             if let thumbnailImage {
                 Image(uiImage: thumbnailImage)
                     .resizable()
                     .scaledToFill()
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             } else {
                 VStack(spacing: 8) {
                     Image(systemName: "book.closed")
-                        .font(.system(size: 22))
+                        .font(.system(size: 24))
                         .foregroundStyle(.tint)
 
                     Text(title.trimmed.isEmpty ? "未命名" : title)
@@ -440,7 +590,7 @@ private struct BookThumbnail: View {
             return
         }
 
-        let maxPixelSize = Int(92 * displayScale)
+        let maxPixelSize = Int(360 * displayScale)
 
         if let cachedImage = CoverThumbnailRenderer.cachedImage(for: assetID, maxPixelSize: maxPixelSize) {
             thumbnailImage = cachedImage
@@ -517,43 +667,68 @@ private enum CoverThumbnailRenderer {
     }
 }
 
+private struct OffsetReader: View {
+    var body: some View {
+        GeometryReader { proxy in
+            Color.clear
+                .preference(
+                    key: ScrollOffsetPreferenceKey.self,
+                    value: proxy.frame(in: .named("library-scroll")).minY
+                )
+        }
+        .frame(height: 0)
+    }
+}
+
+private struct ScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 private enum EditorTarget: Identifiable {
-    case create(defaultLocation: BookLocation)
-    case edit(Book, initialCoverData: Data?)
+    case create(defaultLocationID: String)
+    case edit(Book, initialCoverData: Data?, defaultLocationID: String)
 
     var id: String {
         switch self {
-        case .create(let defaultLocation):
-            return "create-\(defaultLocation.rawValue)"
-        case .edit(let book, _):
-            return "edit-\(book.id)"
+        case .create:
+            return "create"
+        case .edit(let book, _, _):
+            return book.id
         }
     }
 
     var book: Book? {
-        switch self {
-        case .create:
-            return nil
-        case .edit(let book, _):
+        if case .edit(let book, _, _) = self {
             return book
         }
-    }
 
-    var defaultLocation: BookLocation {
-        switch self {
-        case .create(let defaultLocation):
-            return defaultLocation
-        case .edit(let book, _):
-            return book.location
-        }
+        return nil
     }
 
     var initialCoverData: Data? {
-        switch self {
-        case .create:
-            return nil
-        case .edit(_, let initialCoverData):
+        if case .edit(_, let initialCoverData, _) = self {
             return initialCoverData
         }
+
+        return nil
+    }
+
+    var defaultLocationID: String {
+        switch self {
+        case .create(let defaultLocationID):
+            return defaultLocationID
+        case .edit(_, _, let defaultLocationID):
+            return defaultLocationID
+        }
+    }
+}
+
+private extension LibraryStore {
+    var locationsDictionary: [String: LibraryLocation] {
+        Dictionary(uniqueKeysWithValues: locations.map { ($0.id, $0) })
     }
 }
