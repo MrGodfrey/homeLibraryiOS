@@ -276,38 +276,38 @@ actor InMemoryLibraryRemoteService: LibraryRemoteSyncing {
 
 final class CloudKitLibraryService: NSObject, LibraryRemoteSyncing {
     private enum RecordType {
-        nonisolated(unsafe) static let repository = "LibraryRepository"
-        nonisolated(unsafe) static let book = "LibraryBook"
-        nonisolated(unsafe) static let location = "LibraryLocation"
+        nonisolated static let repository = "LibraryRepository"
+        nonisolated static let book = "LibraryBook"
+        nonisolated static let location = "LibraryLocation"
     }
 
     private enum RepositoryField {
-        nonisolated(unsafe) static let name = "name"
-        nonisolated(unsafe) static let schemaVersion = "schemaVersion"
-        nonisolated(unsafe) static let createdAt = "createdAt"
-        nonisolated(unsafe) static let updatedAt = "updatedAt"
+        nonisolated static let name = "name"
+        nonisolated static let schemaVersion = "schemaVersion"
+        nonisolated static let createdAt = "createdAt"
+        nonisolated static let updatedAt = "updatedAt"
     }
 
     private enum LocationField {
-        nonisolated(unsafe) static let name = "name"
-        nonisolated(unsafe) static let sortOrder = "sortOrder"
-        nonisolated(unsafe) static let isVisible = "isVisible"
+        nonisolated static let name = "name"
+        nonisolated static let sortOrder = "sortOrder"
+        nonisolated static let isVisible = "isVisible"
     }
 
     private enum BookField {
-        nonisolated(unsafe) static let title = "title"
-        nonisolated(unsafe) static let author = "author"
-        nonisolated(unsafe) static let locationID = "locationID"
-        nonisolated(unsafe) static let payload = "payload"
-        nonisolated(unsafe) static let coverAssetID = "coverAssetID"
-        nonisolated(unsafe) static let coverAsset = "coverAsset"
-        nonisolated(unsafe) static let schemaVersion = "schemaVersion"
-        nonisolated(unsafe) static let createdAt = "createdAt"
-        nonisolated(unsafe) static let updatedAt = "updatedAt"
+        nonisolated static let title = "title"
+        nonisolated static let author = "author"
+        nonisolated static let locationID = "locationID"
+        nonisolated static let payload = "payload"
+        nonisolated static let coverAssetID = "coverAssetID"
+        nonisolated static let coverAsset = "coverAsset"
+        nonisolated static let schemaVersion = "schemaVersion"
+        nonisolated static let createdAt = "createdAt"
+        nonisolated static let updatedAt = "updatedAt"
     }
 
     private enum RecordName {
-        nonisolated(unsafe) static let repository = "repository"
+        nonisolated static let repository = "repository"
         nonisolated static func location(_ id: String) -> String { "location.\(id)" }
         nonisolated static func book(_ id: String) -> String { "book.\(id)" }
     }

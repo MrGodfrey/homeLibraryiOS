@@ -8,7 +8,7 @@
 import Foundation
 
 enum LibraryEnvironment {
-    nonisolated(unsafe) private static let testRunnerPrefix = "TEST_RUNNER_"
+    nonisolated private static let testRunnerPrefix = "TEST_RUNNER_"
 
     nonisolated static func resolved(_ environment: [String: String]) -> [String: String] {
         var resolvedEnvironment = environment

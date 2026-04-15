@@ -903,7 +903,7 @@ enum LibraryZipArchiveWriter {
 }
 
 private enum CRC32 {
-    static let table: [UInt32] = (0..<256).map { value in
+    nonisolated static let table: [UInt32] = (0..<256).map { value in
         var current = UInt32(value)
         for _ in 0..<8 {
             if current & 1 == 1 {
