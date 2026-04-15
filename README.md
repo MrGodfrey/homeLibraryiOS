@@ -205,6 +205,24 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 
 有些界面会把系统字段显示成 `recordName`，有些资料会写成 `___recordId`。这两个说的是同一个系统字段映射，不用纠结名字差异，关键是把 `recordName` 对应的查询索引打开。
 
+如果你当前看到的是字段列表页面，并且右上角有 `Edit Indexes` 按钮，那么可以直接走这条路径：
+
+1. 点右上 `Edit Indexes`
+2. 在 `recordName` 这一行，把 `Single Field Indexes` 从 `None` 改成 `Queryable`
+3. 保存
+
+如果你在当前页面里没有看到可直接切换的下拉或开关，也可以走另一条路径：
+
+1. 回到 `Schema`
+2. 进入 `Indexes`
+3. 点击 `+`
+4. `Record Type` 选择 `LibraryRepository`
+5. `Index Type` 选择 `QUERYABLE`
+6. `Field` 选择 `recordName`
+7. 保存
+
+如果后面报 `__createdBy is not marked queryable`，在 Dashboard 里对应的字段通常显示为 `createdUserRecordName`。这时也可以按同样方式补一个 `QUERYABLE` 索引。
+
 #### 第三步：检查 `LibraryBook`
 
 1. 继续留在 `Schema`
@@ -212,6 +230,14 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 3. 打开字段或索引配置页
 4. 找到系统字段 `recordName`
 5. 同样把它标记为 `QUERYABLE`
+
+对 `LibraryBook` 也可以走同样的两条路径：
+
+- 在 record type 页面点 `Edit Indexes`，把 `recordName` 改成 `Queryable`
+- 或者回到 `Schema -> Indexes -> +`，新建：
+  - `Record Type = LibraryBook`
+  - `Index Type = QUERYABLE`
+  - `Field = recordName`
 
 #### 第四步：如果你仍然报其他字段 not marked queryable
 
