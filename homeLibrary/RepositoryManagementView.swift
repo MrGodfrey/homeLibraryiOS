@@ -37,8 +37,13 @@ struct RepositoryManagementView: View {
                     createRepositorySection
                 }
             }
+            .libraryFormChrome()
+            .listSectionSpacing(18)
+            .tint(LibraryTheme.accent)
             .navigationTitle("仓库设置")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarBackground(LibraryTheme.background, for: .navigationBar)
             .fileImporter(
                 isPresented: $isShowingLegacyImportPicker,
                 allowedContentTypes: [.json],
@@ -80,11 +85,12 @@ struct RepositoryManagementView: View {
     }
 
     private var currentRepositorySection: some View {
-        Section("当前仓库") {
+        Section {
             if let currentRepository = store.currentRepository {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(currentRepository.name)
                         .font(.headline)
+                        .foregroundStyle(LibraryTheme.title)
 
                     LabeledContent("角色", value: store.repositoryRoleTitle)
                     LabeledContent("数据库", value: store.repositoryScopeTitle)
@@ -92,22 +98,26 @@ struct RepositoryManagementView: View {
 
                     Text(currentRepository.zoneIDDescription)
                         .font(.footnote.monospaced())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(LibraryTheme.secondaryText)
                         .textSelection(.enabled)
                 }
                 .padding(.vertical, 4)
             } else {
                 Text("当前设备还没有可访问的家庭书库。")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LibraryTheme.secondaryText)
             }
         }
+        header: {
+            sectionHeader("当前仓库")
+        }
+        .listRowBackground(LibraryTheme.surface)
     }
 
     private var repositoriesSection: some View {
-        Section("可访问的仓库") {
+        Section {
             if store.availableRepositories.isEmpty {
                 Text("还没有发现任何可访问仓库。")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LibraryTheme.secondaryText)
             } else {
                 ForEach(store.availableRepositories) { repository in
                     VStack(alignment: .leading, spacing: 8) {
@@ -115,9 +125,10 @@ struct RepositoryManagementView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(repository.name)
                                     .font(.body.weight(.semibold))
+                                    .foregroundStyle(LibraryTheme.title)
                                 Text("\(repository.role.title) · \(repository.databaseScope.title)")
                                     .font(.footnote)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(LibraryTheme.secondaryText)
                             }
 
                             Spacer()
@@ -128,7 +139,8 @@ struct RepositoryManagementView: View {
                                     .font(.caption.weight(.bold))
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 5)
-                                    .background(Color.primary.opacity(0.1), in: Capsule())
+                                    .foregroundStyle(LibraryTheme.bodyText)
+                                    .background(LibraryTheme.surfaceSecondary, in: Capsule())
                             } else {
                                 Button("切换") {
                                     Task {
@@ -140,45 +152,65 @@ struct RepositoryManagementView: View {
 
                         Text(repository.subtitle)
                             .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(LibraryTheme.secondaryText)
                     }
                     .padding(.vertical, 4)
                 }
             }
 
             if !store.hasOwnedRepository {
-                Button(store.isCreatingRepository ? "创建中..." : "创建我的仓库") {
+                Button {
                     Task {
                         _ = await store.createOwnedRepository()
                     }
+                } label: {
+                    formActionLabel(
+                        title: store.isCreatingRepository ? "创建中..." : "创建我的仓库",
+                        systemName: "books.vertical",
+                        tint: LibraryTheme.accent
+                    )
                 }
                 .disabled(store.isCreatingRepository || store.isImportingLegacyData)
                 .accessibilityIdentifier("createOwnedRepositoryButton")
             }
         }
+        header: {
+            sectionHeader("可访问的仓库")
+        }
+        .listRowBackground(LibraryTheme.surface)
     }
 
     private var createRepositorySection: some View {
-        Section("创建我的仓库") {
+        Section {
             Text("创建后即可开始录入书籍，并通过系统共享邀请家人加入。")
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(LibraryTheme.secondaryText)
 
-            Button(store.isCreatingRepository ? "创建中..." : "创建我的仓库") {
+            Button {
                 Task {
                     let didCreate = await store.createOwnedRepository()
                     if didCreate {
                         dismiss()
                     }
                 }
+            } label: {
+                formActionLabel(
+                    title: store.isCreatingRepository ? "创建中..." : "创建我的仓库",
+                    systemName: "books.vertical",
+                    tint: LibraryTheme.accent
+                )
             }
             .disabled(store.isCreatingRepository || store.isImportingLegacyData)
             .accessibilityIdentifier("createOwnedRepositoryButton")
         }
+        header: {
+            sectionHeader("创建我的仓库")
+        }
+        .listRowBackground(LibraryTheme.surface)
     }
 
     private var locationsSection: some View {
-        Section("地点配置") {
+        Section {
             ForEach($draftLocations) { $location in
                 VStack(alignment: .leading, spacing: 8) {
                     TextField("地点名称", text: $location.name)
@@ -217,62 +249,94 @@ struct RepositoryManagementView: View {
                     )
                 )
             } label: {
-                Label("新增地点", systemImage: "plus")
+                formActionLabel(title: "新增地点", systemName: "plus", tint: LibraryTheme.accent)
             }
 
-            Button("保存地点配置") {
+            Button {
                 Task {
                     _ = await store.saveLocations(normalizedDraftLocations())
                 }
+            } label: {
+                formActionLabel(title: "保存地点配置", systemName: "checkmark", tint: LibraryTheme.accent)
             }
             .disabled(draftLocations.isEmpty)
         }
+        header: {
+            sectionHeader("地点配置")
+        }
+        .listRowBackground(LibraryTheme.surface)
     }
 
     private var sharingSection: some View {
-        Section("共享") {
+        Section {
             Text("通过系统共享把这座家庭书库发给家人，加入和权限管理都交给 Apple ID 完成。")
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(LibraryTheme.secondaryText)
 
-            Button("邀请家人加入") {
+            Button {
                 Task {
                     await openSharingController()
                 }
+            } label: {
+                formActionLabel(title: "邀请家人加入", systemName: "person.crop.circle.badge.plus", tint: LibraryTheme.accent)
             }
         }
+        header: {
+            sectionHeader("共享")
+        }
+        .listRowBackground(LibraryTheme.surface)
     }
 
     private var advancedManagementSection: some View {
-        Section("高级管理") {
+        Section {
             if let progress = store.importProgress {
                 HStack {
                     ProgressView(value: Double(progress.importedCount), total: Double(max(progress.totalCount, 1)))
                     Text(progress.statusText)
                         .font(.footnote.weight(.semibold))
+                        .foregroundStyle(LibraryTheme.bodyText)
                 }
             }
 
-            Button(store.isImportingLegacyData ? "导入中..." : "迁移旧数据 JSON") {
+            Button {
                 isShowingLegacyImportPicker = true
+            } label: {
+                formActionLabel(
+                    title: store.isImportingLegacyData ? "导入中..." : "迁移旧数据 JSON",
+                    systemName: "square.and.arrow.down",
+                    tint: LibraryTheme.accent
+                )
             }
             .disabled(store.isCreatingRepository || store.isImportingLegacyData)
             .accessibilityIdentifier("importLegacyJSONButton")
 
-            Button("导出当前仓库 ZIP") {
+            Button {
                 Task {
                     if let url = await store.exportCurrentRepository() {
                         activitySheetItem = ActivitySheetItem(url: url)
                     }
                 }
+            } label: {
+                formActionLabel(title: "导出当前仓库 ZIP", systemName: "square.and.arrow.up", tint: LibraryTheme.accent)
             }
             .accessibilityIdentifier("exportRepositoryButton")
 
-            Button("清空当前仓库", role: .destructive) {
+            Button(role: .destructive) {
                 isShowingClearConfirmation = true
+            } label: {
+                formActionLabel(
+                    title: "清空当前仓库",
+                    systemName: "trash",
+                    tint: LibraryTheme.destructive,
+                    textColor: LibraryTheme.destructive
+                )
             }
             .accessibilityIdentifier("clearRepositoryButton")
         }
+        header: {
+            sectionHeader("高级管理")
+        }
+        .listRowBackground(LibraryTheme.surface)
     }
 
     private func handleLegacyImportSelection(_ result: Result<[URL], Error>) {
@@ -334,9 +398,39 @@ struct RepositoryManagementView: View {
     private func locationMoveButton(systemName: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
+                .foregroundStyle(enabled ? LibraryTheme.icon : LibraryTheme.tertiaryText)
         }
         .disabled(!enabled)
         .buttonStyle(.plain)
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(LibraryTheme.secondaryText)
+            .textCase(nil)
+    }
+
+    private func formActionLabel(
+        title: String,
+        systemName: String,
+        tint: Color,
+        textColor: Color = LibraryTheme.bodyText
+    ) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemName)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 30, height: 30)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(tint.opacity(0.14))
+                )
+
+            Text(title)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(textColor)
+        }
     }
 
     @MainActor

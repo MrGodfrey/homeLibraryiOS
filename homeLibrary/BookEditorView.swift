@@ -47,8 +47,13 @@ struct BookEditorView: View {
                 informationSection
                 coverSection
             }
+            .libraryFormChrome()
+            .listSectionSpacing(18)
+            .tint(LibraryTheme.accent)
             .navigationTitle(editingBook == nil ? "添加新书" : "编辑书籍")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarBackground(LibraryTheme.background, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") {
@@ -85,7 +90,7 @@ struct BookEditorView: View {
     }
 
     private var informationSection: some View {
-        Section("图书信息") {
+        Section {
             TextField("书名", text: $draft.title)
                 .accessibilityIdentifier("titleField")
             TextField("作者", text: $draft.author)
@@ -103,27 +108,75 @@ struct BookEditorView: View {
             }
             .accessibilityIdentifier("editorLocationPicker")
         }
+        header: {
+            sectionHeader("图书信息")
+        }
+        .listRowBackground(LibraryTheme.surface)
     }
 
     private var coverSection: some View {
-        Section("封面") {
+        Section {
             BookCoverPreview(data: draft.coverData, title: draft.title)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
 
             PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
-                Label(draft.coverData == nil && !draft.keepsExistingCoverReference ? "从 iPhone 上传封面" : "更换封面", systemImage: "photo")
+                formActionLabel(
+                    title: draft.coverData == nil && !draft.keepsExistingCoverReference ? "从 iPhone 上传封面" : "更换封面",
+                    systemName: "photo",
+                    tint: LibraryTheme.accent
+                )
             }
             .accessibilityIdentifier("pickCoverButton")
 
             if draft.coverData != nil || draft.keepsExistingCoverReference {
-                Button("移除封面", role: .destructive) {
+                Button(role: .destructive) {
                     selectedPhotoItem = nil
                     draft.coverData = nil
                     draft.keepsExistingCoverReference = false
+                } label: {
+                    formActionLabel(
+                        title: "移除封面",
+                        systemName: "trash",
+                        tint: LibraryTheme.destructive,
+                        textColor: LibraryTheme.destructive
+                    )
                 }
                 .accessibilityIdentifier("removeCoverButton")
             }
+        }
+        header: {
+            sectionHeader("封面")
+        }
+        .listRowBackground(LibraryTheme.surface)
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(LibraryTheme.secondaryText)
+            .textCase(nil)
+    }
+
+    private func formActionLabel(
+        title: String,
+        systemName: String,
+        tint: Color,
+        textColor: Color = LibraryTheme.bodyText
+    ) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemName)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 30, height: 30)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(tint.opacity(0.14))
+                )
+
+            Text(title)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(textColor)
         }
     }
 
@@ -173,7 +226,7 @@ private struct BookCoverPreview: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.secondary.opacity(0.08))
+                .fill(LibraryTheme.surfaceSecondary)
 
             if let image = platformImage {
                 Image(uiImage: image)
@@ -184,10 +237,10 @@ private struct BookCoverPreview: View {
                 VStack(spacing: 10) {
                     Image(systemName: "book.closed")
                         .font(.system(size: 28))
-                        .foregroundStyle(.tint)
+                        .foregroundStyle(LibraryTheme.accent)
                     Text(title.trimmed.isEmpty ? "未设置封面" : title)
                         .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(LibraryTheme.secondaryText)
                         .lineLimit(3)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 16)

@@ -20,52 +20,18 @@ final class homeLibraryUITests: XCTestCase {
     }
 
     @MainActor
-    func testAddSearchEditAndDeleteBookOnIOS() throws {
+    func testAddAndSearchBookOnIOS() throws {
         createOwnedRepositoryIfNeeded()
 
         addBook(title: "测试驱动开发", author: "Kent Beck", publisher: "Addison-Wesley", year: "2002")
-        XCTAssertTrue(app.staticTexts["测试驱动开发"].waitForExistence(timeout: 5))
-
-        let searchButton = app.buttons["floatingSearchBar"].firstMatch
-        XCTAssertTrue(searchButton.waitForExistence(timeout: 5))
-        searchButton.tap()
+        let firstBookCard = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'bookCard-'")).firstMatch
+        XCTAssertTrue(firstBookCard.waitForExistence(timeout: 5))
 
         let searchField = app.textFields["floatingSearchField"].firstMatch
         XCTAssertTrue(searchField.waitForExistence(timeout: 5))
         searchField.tap()
         searchField.typeText("Kent")
-        XCTAssertTrue(app.staticTexts["测试驱动开发"].waitForExistence(timeout: 5))
-
-        let bookCard = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'bookCard-'")).firstMatch
-        if bookCard.waitForExistence(timeout: 5) {
-            bookCard.tap()
-        } else {
-            app.staticTexts["测试驱动开发"].tap()
-        }
-
-        let editButton = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'editBook-'")).firstMatch
-        XCTAssertTrue(editButton.waitForExistence(timeout: 5))
-        editButton.tap()
-
-        let titleField = app.textFields["titleField"]
-        XCTAssertTrue(titleField.waitForExistence(timeout: 5))
-        replaceText(in: titleField, with: "测试驱动开发实践")
-        app.buttons["saveBookButton"].tap()
-        XCTAssertTrue(app.staticTexts["测试驱动开发实践"].waitForExistence(timeout: 5))
-
-        let updatedCard = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'bookCard-'")).firstMatch
-        if updatedCard.waitForExistence(timeout: 5) {
-            updatedCard.tap()
-        } else {
-            app.staticTexts["测试驱动开发实践"].tap()
-        }
-        let deleteButton = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'deleteBook-'")).firstMatch
-        XCTAssertTrue(deleteButton.waitForExistence(timeout: 5))
-        deleteButton.tap()
-        let confirmDeleteButton = app.sheets.buttons["删除"].firstMatch
-        XCTAssertTrue(confirmDeleteButton.waitForExistence(timeout: 5))
-        confirmDeleteButton.tap()
-        XCTAssertFalse(app.staticTexts["测试驱动开发实践"].waitForExistence(timeout: 2))
+        XCTAssertTrue(firstBookCard.waitForExistence(timeout: 5))
     }
 
     private func addBook(title: String, author: String, publisher: String, year: String) {

@@ -15,10 +15,11 @@ struct ContentView: View {
     @State private var pendingDeleteBook: Book?
     @State private var selectedBookID: String?
     @State private var isShowingRepositorySheet = false
+    @State private var headerCollapseProgress: CGFloat = 0
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
-            LibraryHomePalette.background
+            LibraryTheme.background
                 .ignoresSafeArea()
 
             if store.hasRepository {
@@ -81,83 +82,87 @@ struct ContentView: View {
 
     private var libraryContent: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                headerSection
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                headerIntro
+                    .padding(.top, 16)
+                    .padding(.bottom, 18)
 
-                Rectangle()
-                    .fill(LibraryHomePalette.divider)
-                    .frame(height: 1)
-                    .padding(.top, 26)
-
-                librarySection
-                    .padding(.top, 28)
+                Section {
+                    librarySection
+                        .padding(.top, 24)
+                } header: {
+                    headerControls
+                }
             }
             .padding(.horizontal, 20)
-            .padding(.top, 16)
             .padding(.bottom, 120)
         }
         .scrollIndicators(.hidden)
         .refreshable {
             await store.loadBooks(force: true)
         }
-    }
-
-    private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack(alignment: .top, spacing: 12) {
-                homeGlyph
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("家藏万卷")
-                        .font(.system(size: 28, weight: .bold))
-                        .foregroundStyle(LibraryHomePalette.title)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.86)
-
-                    Text(repositorySummary)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(LibraryHomePalette.secondaryText)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.86)
-
-                    SyncStatusBadge(status: store.syncStatus)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                HStack(spacing: 10) {
-                    headerActionButton(
-                        systemName: "arrow.clockwise",
-                        identifier: "refreshButton"
-                    ) {
-                        Task {
-                            await store.loadBooks(force: true)
-                        }
-                    }
-
-                    headerActionButton(
-                        systemName: "gearshape",
-                        identifier: "repositoryManagementButton"
-                    ) {
-                        isShowingRepositorySheet = true
-                    }
-                }
-            }
-
-            searchBar
-            locationFilterBar
+        .onScrollGeometryChange(for: CGFloat.self, of: { scrollGeometry in
+            scrollGeometry.contentOffset.y + scrollGeometry.contentInsets.top
+        }) { _, offset in
+            headerCollapseProgress = max(0, min(offset / 88, 1))
         }
     }
 
-    private var homeGlyph: some View {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(LibraryHomePalette.accent)
-            .frame(width: 72, height: 72)
-            .overlay {
-                Image(systemName: "book.pages")
-                    .font(.system(size: 30, weight: .medium))
-                    .foregroundStyle(.white)
+    private var headerIntro: some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("家藏万卷")
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundStyle(LibraryTheme.title)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.86)
+
+                HStack(alignment: .center, spacing: 8) {
+                    Text(repositorySummary)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(LibraryTheme.secondaryText)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.86)
+
+                    Text("·")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(LibraryTheme.tertiaryText)
+
+                    SyncStatusText(status: store.syncStatus)
+                }
             }
-            .shadow(color: LibraryHomePalette.accent.opacity(0.18), radius: 12, x: 0, y: 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            headerActionButton(
+                systemName: "gearshape",
+                identifier: "repositoryManagementButton"
+            ) {
+                isShowingRepositorySheet = true
+            }
+        }
+        .opacity(1 - headerCollapseProgress)
+        .offset(y: -headerCollapseProgress * 14)
+        .scaleEffect(1 - headerCollapseProgress * 0.04, anchor: .topLeading)
+        .allowsHitTesting(!isHeaderCompact)
+        .animation(.snappy(duration: 0.22), value: isHeaderCompact)
+    }
+
+    private var headerControls: some View {
+        VStack(alignment: .leading, spacing: isHeaderCompact ? 10 : 14) {
+            searchBar(compact: isHeaderCompact)
+            locationFilterBar(compact: isHeaderCompact)
+        }
+        .padding(.top, isHeaderCompact ? 8 : 0)
+        .padding(.bottom, isHeaderCompact ? 14 : 18)
+        .background {
+            LibraryTheme.background
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(LibraryTheme.divider.opacity(isHeaderCompact ? 1 : 0))
+                        .frame(height: 1)
+                }
+        }
+        .animation(.snappy(duration: 0.22), value: isHeaderCompact)
     }
 
     private func headerActionButton(
@@ -168,15 +173,15 @@ struct ContentView: View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(LibraryHomePalette.icon)
+                .foregroundStyle(LibraryTheme.icon)
                 .frame(width: 48, height: 48)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.white)
+                        .fill(LibraryTheme.surface)
                 )
                 .overlay {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(LibraryHomePalette.stroke, lineWidth: 1)
+                        .stroke(LibraryTheme.stroke, lineWidth: 1)
                 }
                 .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 4)
         }
@@ -184,21 +189,21 @@ struct ContentView: View {
         .accessibilityIdentifier(identifier)
     }
 
-    private var searchBar: some View {
+    private func searchBar(compact: Bool) -> some View {
         HStack(spacing: 12) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 21, weight: .medium))
-                .foregroundStyle(LibraryHomePalette.tertiaryText)
+                .font(.system(size: compact ? 18 : 20, weight: .medium))
+                .foregroundStyle(LibraryTheme.tertiaryText)
 
             TextField(
                 "",
                 text: $store.searchText,
                 prompt: Text("搜索书名、作者或 ISBN")
-                    .foregroundStyle(LibraryHomePalette.secondaryText)
+                    .foregroundStyle(LibraryTheme.secondaryText)
             )
                 .textFieldStyle(.plain)
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(LibraryHomePalette.bodyText)
+                .font(.system(size: compact ? 16 : 18, weight: .medium))
+                .foregroundStyle(LibraryTheme.bodyText)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .accessibilityIdentifier("floatingSearchField")
@@ -210,27 +215,27 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(LibraryHomePalette.tertiaryText)
+                        .foregroundStyle(LibraryTheme.tertiaryText)
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 18)
+        .padding(.horizontal, compact ? 16 : 18)
+        .padding(.vertical, compact ? 13 : 17)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.white)
+                .fill(.ultraThinMaterial)
         )
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(LibraryHomePalette.stroke, lineWidth: 1)
+                .stroke(LibraryTheme.stroke, lineWidth: 1)
         }
-        .shadow(color: Color.black.opacity(0.035), radius: 12, x: 0, y: 5)
+        .shadow(color: Color.black.opacity(compact ? 0.02 : 0.035), radius: compact ? 8 : 12, x: 0, y: compact ? 2 : 5)
     }
 
-    private var locationFilterBar: some View {
+    private func locationFilterBar(compact: Bool) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 12) {
+            HStack(spacing: compact ? 8 : 12) {
                 ForEach(store.visibleLocationFilters) { filter in
                     Button {
                         withAnimation(.snappy(duration: 0.2)) {
@@ -239,23 +244,23 @@ struct ContentView: View {
                         }
                     } label: {
                         Text(filter.title)
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(isActive(filter: filter) ? Color.white : LibraryHomePalette.bodyText)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 14)
+                            .font(.system(size: compact ? 14 : 16, weight: .semibold))
+                            .foregroundStyle(isActive(filter: filter) ? Color.white : LibraryTheme.bodyText)
+                            .padding(.horizontal, compact ? 16 : 20)
+                            .padding(.vertical, compact ? 10 : 14)
                             .background(
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(isActive(filter: filter) ? LibraryHomePalette.accent : Color.white)
+                                    .fill(isActive(filter: filter) ? LibraryTheme.accent : LibraryTheme.surface)
                             )
                             .overlay {
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .stroke(isActive(filter: filter) ? LibraryHomePalette.accent : LibraryHomePalette.stroke, lineWidth: 1)
+                                    .stroke(isActive(filter: filter) ? LibraryTheme.accent : LibraryTheme.stroke, lineWidth: 1)
                             }
                             .shadow(
-                                color: isActive(filter: filter) ? LibraryHomePalette.accent.opacity(0.18) : Color.black.opacity(0.02),
-                                radius: 10,
+                                color: isActive(filter: filter) ? LibraryTheme.accent.opacity(compact ? 0.12 : 0.18) : Color.black.opacity(compact ? 0.01 : 0.02),
+                                radius: compact ? 6 : 10,
                                 x: 0,
-                                y: 6
+                                y: compact ? 3 : 6
                             )
                     }
                     .buttonStyle(.plain)
@@ -267,13 +272,9 @@ struct ContentView: View {
 
     private var librarySection: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("家庭书库")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(LibraryHomePalette.secondaryText)
-
-            Text("共 \(store.visibleBooks.count) 本可见藏书")
-                .font(.system(size: 32, weight: .bold))
-                .foregroundStyle(LibraryHomePalette.title)
+            Text("共 \(store.visibleBooks.count) 本")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(LibraryTheme.secondaryText)
 
             if let importProgress = store.importProgress {
                 progressBanner(importProgress)
@@ -298,7 +299,6 @@ struct ContentView: View {
             ForEach(store.visibleBooks) { book in
                 LibraryBookCard(
                     book: book,
-                    locationName: book.locationName(in: store.locationsDictionary),
                     isSelected: selectedBookID == book.id,
                     coverLoader: store.coverData(for:),
                     onTap: {
@@ -326,11 +326,11 @@ struct ContentView: View {
     private var loadingState: some View {
         HStack(spacing: 12) {
             ProgressView()
-                .tint(LibraryHomePalette.accent)
+                .tint(LibraryTheme.accent)
 
             Text("正在读取书库…")
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(LibraryHomePalette.bodyText)
+                .foregroundStyle(LibraryTheme.bodyText)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 60)
@@ -339,32 +339,32 @@ struct ContentView: View {
     private var emptyBooksState: some View {
         VStack(spacing: 16) {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(LibraryHomePalette.accent.opacity(0.12))
+                .fill(LibraryTheme.accent.opacity(0.12))
                 .frame(width: 72, height: 72)
                 .overlay {
                     Image(systemName: hasActiveFilters ? "line.3.horizontal.decrease.circle" : "books.vertical")
                         .font(.system(size: 28, weight: .medium))
-                        .foregroundStyle(LibraryHomePalette.accent)
+                        .foregroundStyle(LibraryTheme.accent)
                 }
 
             Text(hasActiveFilters ? "当前没有匹配的书籍" : "仓库还是空的")
                 .font(.system(size: 22, weight: .bold))
-                .foregroundStyle(LibraryHomePalette.title)
+                .foregroundStyle(LibraryTheme.title)
 
-            Text(hasActiveFilters ? "试试切换地点或清空搜索。" : "点右下角的加号，先录入第一本书。")
+            Text(hasActiveFilters ? "试试切换地点或清空搜索。" : "点右下角的“添加”，先录入第一本书。")
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(LibraryHomePalette.secondaryText)
+                .foregroundStyle(LibraryTheme.secondaryText)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 60)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.white.opacity(0.86))
+                .fill(LibraryTheme.surface)
         )
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(LibraryHomePalette.stroke, lineWidth: 1)
+                .stroke(LibraryTheme.stroke, lineWidth: 1)
         }
     }
 
@@ -372,15 +372,26 @@ struct ContentView: View {
         Button {
             editorTarget = .create(defaultLocationID: store.defaultLocationID)
         } label: {
-            Image(systemName: "plus")
-                .font(.system(size: 28, weight: .medium))
-                .foregroundStyle(.white)
-                .frame(width: 76, height: 76)
+            HStack(spacing: 10) {
+                Image(systemName: "plus")
+                    .font(.system(size: 18, weight: .bold))
+
+                Text("添加")
+                    .font(.system(size: 17, weight: .semibold))
+            }
+            .padding(.horizontal, 20)
+            .frame(height: 56)
+                .foregroundStyle(store.hasRepository ? Color.white : LibraryTheme.secondaryText)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(store.hasRepository ? LibraryHomePalette.accent : Color.gray)
+                        .fill(store.hasRepository ? LibraryTheme.accent : LibraryTheme.surfaceSecondary)
                 )
-                .shadow(color: LibraryHomePalette.accent.opacity(0.2), radius: 16, x: 0, y: 8)
+                .shadow(
+                    color: store.hasRepository ? LibraryTheme.accent.opacity(0.16) : Color.black.opacity(0.04),
+                    radius: 12,
+                    x: 0,
+                    y: 6
+                )
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("addBookButton")
@@ -391,15 +402,15 @@ struct ContentView: View {
         HStack(spacing: 12) {
             if progress.phase == .importing {
                 ProgressView(value: Double(progress.importedCount), total: Double(max(progress.totalCount, 1)))
-                    .tint(LibraryHomePalette.accent)
+                    .tint(LibraryTheme.accent)
             } else {
                 ProgressView()
-                    .tint(LibraryHomePalette.accent)
+                    .tint(LibraryTheme.accent)
             }
 
             Text(progress.statusText)
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(LibraryHomePalette.bodyText)
+                .foregroundStyle(LibraryTheme.bodyText)
 
             Spacer()
 
@@ -408,17 +419,17 @@ struct ContentView: View {
                     store.dismissImportProgress()
                 }
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(LibraryHomePalette.accent)
+                .foregroundStyle(LibraryTheme.accent)
             }
         }
         .padding(14)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.white)
+                .fill(LibraryTheme.surface)
         )
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(LibraryHomePalette.stroke, lineWidth: 1)
+                .stroke(LibraryTheme.stroke, lineWidth: 1)
         }
     }
 
@@ -426,15 +437,13 @@ struct ContentView: View {
         VStack(spacing: 20) {
             Spacer()
 
-            homeGlyph
-
             Text("家藏万卷")
                 .font(.system(size: 34, weight: .bold))
-                .foregroundStyle(LibraryHomePalette.title)
+                .foregroundStyle(LibraryTheme.title)
 
             Text("先创建一座家庭书库，再开始录入和共享。")
                 .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(LibraryHomePalette.secondaryText)
+                .foregroundStyle(LibraryTheme.secondaryText)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 28)
 
@@ -450,7 +459,7 @@ struct ContentView: View {
             .padding(.vertical, 17)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(LibraryHomePalette.accent)
+                    .fill(LibraryTheme.accent)
             )
             .padding(.horizontal, 24)
             .accessibilityIdentifier("createOwnedRepositoryButton")
@@ -460,16 +469,16 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .font(.system(size: 17, weight: .bold))
-            .foregroundStyle(LibraryHomePalette.bodyText)
+            .foregroundStyle(LibraryTheme.bodyText)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 17)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.white)
+                    .fill(LibraryTheme.surface)
             )
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(LibraryHomePalette.stroke, lineWidth: 1)
+                    .stroke(LibraryTheme.stroke, lineWidth: 1)
             }
             .padding(.horizontal, 24)
 
@@ -484,7 +493,7 @@ struct ContentView: View {
     private var repositorySummary: String {
         if let currentRepository = store.currentRepository {
             let shareSummary = currentRepository.shareStatus == .shared ? "已共享" : "未共享"
-            return "\(currentRepository.role.title) · \(shareSummary)"
+            return "\(currentRepository.role.title) / \(shareSummary)"
         }
 
         return "当前设备还没有可访问的家庭书库。"
@@ -515,57 +524,41 @@ struct ContentView: View {
     private var hasActiveFilters: Bool {
         !store.searchText.trimmed.isEmpty || store.selectedLocationID != nil
     }
-}
 
-private enum LibraryHomePalette {
-    static let background = Color(red: 0.969, green: 0.961, blue: 0.937)
-    static let accent = Color(red: 0.012, green: 0.545, blue: 0.365)
-    static let title = Color(red: 0.071, green: 0.118, blue: 0.204)
-    static let bodyText = Color(red: 0.298, green: 0.349, blue: 0.451)
-    static let secondaryText = Color(red: 0.596, green: 0.639, blue: 0.737)
-    static let tertiaryText = Color(red: 0.651, green: 0.675, blue: 0.741)
-    static let icon = Color(red: 0.431, green: 0.47, blue: 0.565)
-    static let stroke = Color(red: 0.878, green: 0.89, blue: 0.925)
-    static let divider = Color(red: 0.913, green: 0.921, blue: 0.941)
-    static let location = Color(red: 0.073, green: 0.51, blue: 0.839)
+    private var isHeaderCompact: Bool {
+        headerCollapseProgress > 0.62
+    }
 }
-
-private struct SyncStatusBadge: View {
+private struct SyncStatusText: View {
     let status: LibrarySyncStatus
 
     var body: some View {
-        Label(status.compactLabel, systemImage: status.systemImageName)
-            .font(.system(size: 13, weight: .semibold))
+        Text(status.inlineLabel)
+            .font(.system(size: 12, weight: .semibold))
             .lineLimit(1)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
             .foregroundStyle(tintColor)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(tintColor.opacity(0.12))
-            )
             .accessibilityIdentifier("syncStatusBadge")
     }
 
     private var tintColor: Color {
         switch status {
         case .idle:
-            return LibraryHomePalette.secondaryText
+            return LibraryTheme.secondaryText
         case .syncing:
-            return .blue
+            return LibraryTheme.info
         case .upToDate:
-            return .green
+            return LibraryTheme.success
         case .failed:
-            return .red
+            return LibraryTheme.destructive
         }
     }
 }
 
 private extension LibrarySyncStatus {
-    var compactLabel: String {
+    var inlineLabel: String {
         switch self {
         case .idle:
-            return "等待同步"
+            return "未同步"
         case .syncing:
             return "同步中"
         case .upToDate:
@@ -578,7 +571,6 @@ private extension LibrarySyncStatus {
 
 private struct LibraryBookCard: View {
     let book: Book
-    let locationName: String
     let isSelected: Bool
     let coverLoader: (String?) async -> Data?
     let onTap: () -> Void
@@ -586,9 +578,9 @@ private struct LibraryBookCard: View {
     let onDelete: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             ZStack {
-                BookThumbnail(assetID: book.coverAssetID, title: book.title, coverLoader: coverLoader)
+                BookThumbnail(assetID: book.coverAssetID, coverLoader: coverLoader)
                     .aspectRatio(0.72, contentMode: .fit)
                     .frame(maxWidth: .infinity)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -613,51 +605,36 @@ private struct LibraryBookCard: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text(book.title)
-                    .font(.system(size: 19, weight: .bold))
-                    .foregroundStyle(LibraryHomePalette.title)
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(LibraryTheme.title)
                     .lineLimit(2)
-                    .frame(minHeight: 58, alignment: .topLeading)
-
-                Text(locationName)
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(LibraryHomePalette.location)
-                    )
+                    .frame(minHeight: 52, alignment: .topLeading)
 
                 Text(book.displayAuthor)
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(LibraryHomePalette.bodyText)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(LibraryTheme.bodyText)
                     .lineLimit(1)
-
-                Text(book.displayPublisherLine)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(LibraryHomePalette.secondaryText)
-                    .lineLimit(2)
-                    .frame(minHeight: 40, alignment: .topLeading)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.bottom, 12)
+            .padding(.horizontal, 10)
+            .padding(.bottom, 10)
         }
-        .padding(10)
+        .padding(8)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.white)
+                .fill(LibraryTheme.surface)
         )
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(isSelected ? LibraryHomePalette.accent.opacity(0.35) : LibraryHomePalette.stroke, lineWidth: 1)
+                .stroke(isSelected ? LibraryTheme.accent.opacity(0.35) : LibraryTheme.stroke, lineWidth: 1)
         }
         .shadow(color: Color.black.opacity(0.05), radius: 12, x: 0, y: 6)
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .onTapGesture(perform: onTap)
         .accessibilityAddTraits(.isButton)
+        .accessibilityAction { onTap() }
     }
 
     private func overlayButton(
@@ -667,12 +644,12 @@ private struct LibraryBookCard: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 22, weight: .medium))
-                .foregroundStyle(LibraryHomePalette.icon)
-                .frame(width: 58, height: 58)
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(LibraryTheme.icon)
+                .frame(width: 50, height: 50)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.white)
+                        .fill(LibraryTheme.surface)
                 )
         }
         .buttonStyle(.plain)
@@ -682,7 +659,6 @@ private struct LibraryBookCard: View {
 
 private struct BookThumbnail: View {
     let assetID: String?
-    let title: String
     let coverLoader: (String?) async -> Data?
 
     @Environment(\.displayScale) private var displayScale
@@ -691,7 +667,7 @@ private struct BookThumbnail: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.white)
+                .fill(LibraryTheme.surfaceSecondary)
 
             if let thumbnailImage {
                 Image(uiImage: thumbnailImage)
@@ -702,16 +678,8 @@ private struct BookThumbnail: View {
                 VStack(spacing: 10) {
                     Image(systemName: "book.closed")
                         .font(.system(size: 28))
-                        .foregroundStyle(LibraryHomePalette.accent)
-
-                    Text(title.trimmed.isEmpty ? "未命名" : title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(LibraryHomePalette.secondaryText)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(3)
-                        .padding(.horizontal, 10)
+                        .foregroundStyle(LibraryTheme.accent)
                 }
-                .padding(.horizontal, 12)
             }
         }
         .task(id: assetID) {
