@@ -10,7 +10,6 @@ import Foundation
 nonisolated enum RepositoryRole: String, Codable, Sendable {
     case owner
     case member
-    case localOnly
 
     var title: String {
         switch self {
@@ -18,8 +17,6 @@ nonisolated enum RepositoryRole: String, Codable, Sendable {
             return "我的仓库"
         case .member:
             return "加入的仓库"
-        case .localOnly:
-            return "本地模式"
         }
     }
 }
@@ -46,8 +43,6 @@ nonisolated struct LibraryRepositoryReference: Identifiable, Equatable, Codable,
             return "由你的 CloudKit 仓库承载，其他设备可通过仓库账号密码加入。"
         case .member:
             return "你当前正在协作维护别人的仓库。"
-        case .localOnly:
-            return "当前为本地调试模式，不连接 CloudKit。"
         }
     }
 

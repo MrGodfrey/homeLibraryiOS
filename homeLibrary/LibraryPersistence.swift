@@ -378,6 +378,11 @@ nonisolated struct LegacyLibraryImporter: Sendable {
     let storageRootURL: URL
     let bundleResourceURL: URL?
 
+    nonisolated init(storageRootURL: URL, bundleResourceURL: URL? = nil) {
+        self.storageRootURL = storageRootURL
+        self.bundleResourceURL = bundleResourceURL
+    }
+
     nonisolated func loadBooks() throws -> [LegacyImportedBook] {
         if try hasStructuredRecords() {
             return try loadStructuredBooks()

@@ -95,36 +95,30 @@ struct RepositoryManagementView: View {
 
     private var joinRepositorySection: some View {
         Section("加入别人的仓库") {
-            if store.canManageCloudRepository {
-                TextField("仓库账号", text: $joinAccount)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .accessibilityIdentifier("joinRepositoryAccountField")
+            TextField("仓库账号", text: $joinAccount)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .accessibilityIdentifier("joinRepositoryAccountField")
 
-                SecureField("仓库密码", text: $joinPassword)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .accessibilityIdentifier("joinRepositoryPasswordField")
+            SecureField("仓库密码", text: $joinPassword)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .accessibilityIdentifier("joinRepositoryPasswordField")
 
-                Button(isJoining ? "加入中..." : "加入仓库") {
-                    Task {
-                        isJoining = true
-                        defer { isJoining = false }
+            Button(isJoining ? "加入中..." : "加入仓库") {
+                Task {
+                    isJoining = true
+                    defer { isJoining = false }
 
-                        let didJoin = await store.joinRepository(account: joinAccount, password: joinPassword)
+                    let didJoin = await store.joinRepository(account: joinAccount, password: joinPassword)
 
-                        if didJoin {
-                            dismiss()
-                        }
+                    if didJoin {
+                        dismiss()
                     }
                 }
-                .disabled(isJoining || joinAccount.trimmed.isEmpty || joinPassword.trimmed.isEmpty)
-                .accessibilityIdentifier("joinRepositoryButton")
-            } else {
-                Text("当前是本地调试模式，没有连接 CloudKit。")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
+            .disabled(isJoining || joinAccount.trimmed.isEmpty || joinPassword.trimmed.isEmpty)
+            .accessibilityIdentifier("joinRepositoryButton")
         }
     }
 

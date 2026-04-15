@@ -11,7 +11,6 @@ import Foundation
 
 nonisolated enum LibrarySyncStatus: Equatable {
     case idle
-    case unavailable
     case syncing
     case upToDate(Date)
     case failed(String)
@@ -20,8 +19,6 @@ nonisolated enum LibrarySyncStatus: Equatable {
         switch self {
         case .idle:
             return "等待同步"
-        case .unavailable:
-            return "本地模式"
         case .syncing:
             return "同步中"
         case .upToDate(let date):
@@ -35,8 +32,6 @@ nonisolated enum LibrarySyncStatus: Equatable {
         switch self {
         case .idle:
             return "circle.dashed"
-        case .unavailable:
-            return "externaldrive.badge.xmark"
         case .syncing:
             return "arrow.triangle.2.circlepath"
         case .upToDate:
@@ -103,6 +98,173 @@ enum LibraryRemoteServiceError: LocalizedError {
         case .unknown(let message):
             return message
         }
+    }
+}
+
+actor InMemoryLibraryRemoteService: LibraryRemoteSyncing {
+    private struct StoredRepository: Sendable {
+        var descriptor: RepositoryDescriptor
+        var credentials: RepositoryCredentials
+    }
+
+    private var repositoriesByID: [String: StoredRepository] = [:]
+    private var repositoryIDsByOwnerProfileID: [String: String] = [:]
+    private var snapshotsByRepositoryID: [String: [String: RemoteBookSnapshot]] = [:]
+
+    func bootstrapOwnedRepository(ownerProfileID: String, preferredName: String) async throws -> RepositoryBootstrapResult {
+        if let repositoryID = repositoryIDsByOwnerProfileID[ownerProfileID],
+           let repository = repositoriesByID[repositoryID] {
+            return RepositoryBootstrapResult(
+                descriptor: repository.descriptor,
+                credentials: repository.credentials
+            )
+        }
+
+        let credentials = Self.generateCredentials()
+        let descriptor = RepositoryDescriptor(
+            id: Self.makeRepositoryID(),
+            name: preferredName,
+            ownerProfileID: ownerProfileID,
+            accessAccount: credentials.account
+        )
+        let repository = StoredRepository(descriptor: descriptor, credentials: credentials)
+
+        repositoriesByID[descriptor.id] = repository
+        repositoryIDsByOwnerProfileID[ownerProfileID] = descriptor.id
+        snapshotsByRepositoryID[descriptor.id] = [:]
+
+        return RepositoryBootstrapResult(descriptor: descriptor, credentials: credentials)
+    }
+
+    func fetchRepository(id: String) async throws -> RepositoryDescriptor {
+        guard let repository = repositoriesByID[id] else {
+            throw LibraryRemoteServiceError.repositoryNotFound
+        }
+
+        return repository.descriptor
+    }
+
+    func joinRepository(account: String, password: String) async throws -> RepositoryDescriptor {
+        let normalizedAccount = account.trimmed
+        let normalizedPassword = password.trimmed
+
+        guard !normalizedAccount.isEmpty, !normalizedPassword.isEmpty else {
+            throw LibraryRemoteServiceError.invalidRepositoryCredentials
+        }
+
+        guard let repository = repositoriesByID.values.first(where: { storedRepository in
+            storedRepository.credentials.account == normalizedAccount &&
+                storedRepository.credentials.password == normalizedPassword
+        }) else {
+            throw LibraryRemoteServiceError.invalidRepositoryCredentials
+        }
+
+        return repository.descriptor
+    }
+
+    func rotateCredentials(for repositoryID: String, ownerProfileID: String) async throws -> RepositoryCredentials {
+        guard var repository = repositoriesByID[repositoryID] else {
+            throw LibraryRemoteServiceError.repositoryNotFound
+        }
+
+        guard repository.descriptor.ownerProfileID == ownerProfileID else {
+            throw LibraryRemoteServiceError.permissionDenied
+        }
+
+        let credentials = Self.generateCredentials()
+        repository.credentials = credentials
+        repository.descriptor = RepositoryDescriptor(
+            id: repository.descriptor.id,
+            name: repository.descriptor.name,
+            ownerProfileID: repository.descriptor.ownerProfileID,
+            accessAccount: credentials.account
+        )
+        repositoriesByID[repositoryID] = repository
+        return credentials
+    }
+
+    func fetchBooks(in repositoryID: String) async throws -> [RemoteBookSnapshot] {
+        guard repositoriesByID[repositoryID] != nil else {
+            throw LibraryRemoteServiceError.repositoryNotFound
+        }
+
+        return snapshotsByRepositoryID[repositoryID, default: [:]]
+            .values
+            .sorted { left, right in
+                if left.book.updatedAt != right.book.updatedAt {
+                    return left.book.updatedAt > right.book.updatedAt
+                }
+
+                return left.book.createdAt > right.book.createdAt
+            }
+    }
+
+    func upsertBook(_ book: Book, coverData: Data?, in repositoryID: String) async throws -> RemoteBookSnapshot {
+        guard repositoriesByID[repositoryID] != nil else {
+            throw LibraryRemoteServiceError.repositoryNotFound
+        }
+
+        let currentSnapshots = snapshotsByRepositoryID[repositoryID, default: [:]]
+        let existingSnapshot = currentSnapshots[book.id]
+        let storedCoverAssetID = coverData.map(Self.makeCoverAssetID(from:)) ??
+            book.coverAssetID ??
+            existingSnapshot?.book.coverAssetID
+        let storedCoverData: Data?
+
+        if let coverData {
+            storedCoverData = coverData
+        } else if storedCoverAssetID == existingSnapshot?.book.coverAssetID {
+            storedCoverData = existingSnapshot?.coverData
+        } else {
+            storedCoverData = nil
+        }
+
+        var storedBook = book
+        storedBook.coverAssetID = storedCoverAssetID
+
+        let snapshot = RemoteBookSnapshot(book: storedBook, coverData: storedCoverData)
+        snapshotsByRepositoryID[repositoryID, default: [:]][book.id] = snapshot
+        return snapshot
+    }
+
+    func deleteBook(id: String, deletedAt: Date, in repositoryID: String) async throws {
+        guard repositoriesByID[repositoryID] != nil else {
+            throw LibraryRemoteServiceError.repositoryNotFound
+        }
+
+        _ = deletedAt
+        snapshotsByRepositoryID[repositoryID, default: [:]][id] = nil
+    }
+
+    nonisolated private static func generateCredentials() -> RepositoryCredentials {
+        RepositoryCredentials(
+            account: "HL\(makeRandomCode(length: 8))",
+            password: makeRandomPassword()
+        )
+    }
+
+    nonisolated private static func makeRandomPassword() -> String {
+        [
+            makeRandomCode(length: 4),
+            makeRandomCode(length: 4),
+            makeRandomCode(length: 4)
+        ]
+        .joined(separator: "-")
+    }
+
+    nonisolated private static func makeRandomCode(length: Int) -> String {
+        let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+        return String((0..<length).compactMap { _ in alphabet.randomElement() })
+    }
+
+    nonisolated private static func makeRepositoryID() -> String {
+        "repo.\(UUID().uuidString)"
+    }
+
+    nonisolated private static func makeCoverAssetID(from data: Data) -> String {
+        let digest = SHA256.hash(data: data)
+        let hex = digest.map { String(format: "%02x", $0) }.joined()
+        return "cover-\(hex)"
     }
 }
 

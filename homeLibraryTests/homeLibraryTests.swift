@@ -106,56 +106,46 @@ final class homeLibraryTests: XCTestCase {
         XCTAssertNil(secondaryState.currentRepository)
     }
 
-    func testDebugBuildDefaultsToLocalDebugStorageWithoutCloudSync() {
-        let configuration = LibraryAppConfiguration.live(environment: [:])
+    func testLiveConfigurationDefaultsToPrimaryStorageNamespace() {
+        let configuration = LibraryAppConfiguration.live(
+            environment: ["XCTestConfigurationFilePath": "/tmp/test.xctestconfiguration"]
+        )
 
-        XCTAssertEqual(configuration.sessionStore.namespace, LibraryAppConfiguration.localDebugNamespace)
-        XCTAssertNil(configuration.remoteService)
+        XCTAssertEqual(configuration.sessionStore.namespace, "default")
         XCTAssertEqual(configuration.cacheStore.rootURL.lastPathComponent, "cloudkit-cache")
         XCTAssertEqual(
             configuration.cacheStore.rootURL.deletingLastPathComponent().lastPathComponent,
-            LibraryAppConfiguration.localDebugNamespace
+            "homeLibrary"
         )
     }
 
-    func testExplicitEnvironmentCanReenableCloudSyncOutsideXCTest() {
-        XCTAssertTrue(
-            LibraryAppConfiguration.resolvedCloudSyncEnabled(
-                environment: ["HOME_LIBRARY_ENABLE_CLOUD_SYNC": "1"]
-            )
+    func testMemoryRemoteDriverCanBeSelectedExplicitly() {
+        let configuration = LibraryAppConfiguration.live(
+            environment: [
+                "HOME_LIBRARY_REMOTE_DRIVER": "memory",
+                "HOME_LIBRARY_STORAGE_NAMESPACE": "memory-tests"
+            ]
         )
-        XCTAssertFalse(
-            LibraryAppConfiguration.resolvedCloudSyncEnabled(
-                environment: [
-                    "HOME_LIBRARY_ENABLE_CLOUD_SYNC": "1",
-                    "XCTestConfigurationFilePath": "/tmp/test.xctestconfiguration"
-                ]
-            )
+
+        XCTAssertEqual(configuration.sessionStore.namespace, "memory-tests")
+        XCTAssertTrue(configuration.remoteService is InMemoryLibraryRemoteService)
+    }
+
+    func testXCTestHostDefaultsToMemoryRemoteDriver() {
+        let configuration = LibraryAppConfiguration.live(
+            environment: ["XCTestConfigurationFilePath": "/tmp/test.xctestconfiguration"]
         )
+
+        XCTAssertTrue(configuration.remoteService is InMemoryLibraryRemoteService)
     }
 
     @MainActor
-    func testStorePromotesLocalSessionToCloudRepositoryWhenCloudSyncBecomesAvailable() async throws {
+    func testStoreBootstrapsOwnedCloudRepositoryWhenNoRepositoryExists() async throws {
         let namespace = "store-transition-\(UUID().uuidString)"
         let sessionStore = RepositorySessionStore(namespace: namespace)
-        let sessionKey = "homeLibrary.repository.\(namespace).session"
         let ownerKey = "homeLibrary.repository.\(namespace).ownerProfileID"
         let migrationKey = "homeLibrary.repository.\(namespace).migration.cloud-owned"
-        let currentRepository = LibraryRepositoryReference(
-            id: "local-default",
-            name: "本地调试仓库",
-            role: .localOnly,
-            accessAccount: nil,
-            savedPassword: nil
-        )
-        let initialState = LibrarySessionState(
-            ownerProfileID: "owner-profile",
-            ownedRepository: nil,
-            currentRepository: currentRepository
-        )
-        sessionStore.save(initialState)
         addTeardownBlock {
-            UserDefaults.standard.removeObject(forKey: sessionKey)
             UserDefaults.standard.removeObject(forKey: ownerKey)
             UserDefaults.standard.removeObject(forKey: migrationKey)
         }

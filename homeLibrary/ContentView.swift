@@ -227,7 +227,7 @@ private struct SyncStatusBadge: View {
 
     private var tintColor: Color {
         switch status {
-        case .idle, .unavailable:
+        case .idle:
             return .secondary
         case .syncing:
             return .blue
@@ -301,7 +301,6 @@ private struct BookRowCard: View {
         .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .contentShape(Rectangle())
         .accessibilityIdentifier("bookRow-\(book.id)")
-        .onTapGesture(perform: onEdit)
     }
 
     private var locationTint: Color {
