@@ -515,12 +515,29 @@ final class CloudKitLibraryService: NSObject, LibraryRemoteSyncing {
 
     func deleteRepository(_ repository: LibraryRepositoryReference) async throws {
         try await ensureCloudAccountAvailable()
-        guard repository.isOwner else {
-            throw LibraryRemoteServiceError.permissionDenied
-        }
 
-        let zoneID = repository.zoneID
-        _ = try await privateDatabase.modifyRecordZones(saving: [], deleting: [zoneID])
+        switch repository.databaseScope {
+        case .private:
+            guard repository.isOwner else {
+                throw LibraryRemoteServiceError.permissionDenied
+            }
+
+            let zoneID = repository.zoneID
+            _ = try await privateDatabase.modifyRecordZones(saving: [], deleting: [zoneID])
+        case .shared:
+            guard let shareRecordName = repository.shareRecordName?.trimmed.nilIfEmpty else {
+                throw LibraryRemoteServiceError.shareNotAvailable
+            }
+
+            let shareRecordID = CKRecord.ID(recordName: shareRecordName, zoneID: repository.zoneID)
+            _ = try await saveRecords(
+                [],
+                deleting: [shareRecordID],
+                in: sharedDatabase,
+                operationName: "deleteRepository.leaveShare",
+                zoneID: repository.zoneID
+            )
+        }
     }
 
     func acceptShare(metadata: CKShare.Metadata) async throws {

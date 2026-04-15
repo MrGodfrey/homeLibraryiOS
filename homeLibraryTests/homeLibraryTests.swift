@@ -212,6 +212,70 @@ final class homeLibraryTests: XCTestCase {
     }
 
     @MainActor
+    func testStoreAllowsRemovingOnlyNonCurrentRepositoryWhenMultipleRepositoriesExist() async throws {
+        let namespace = "store-remove-rules-\(UUID().uuidString)"
+        let sessionStore = RepositorySessionStore(namespace: namespace)
+        let tempRoot = try makeTemporaryDirectory()
+        let configuration = LibraryAppConfiguration(
+            cacheStore: LibraryCacheStore(rootURL: tempRoot.appendingPathComponent("cloudkit-cache", isDirectory: true)),
+            legacyImporter: LegacyLibraryImporter(storageRootURL: tempRoot),
+            sessionStore: sessionStore,
+            remoteService: InMemoryLibraryRemoteService(),
+            preferredOwnedRepositoryName: "我的家庭书库"
+        )
+
+        let store = LibraryStore(configuration: configuration)
+
+        let didCreateFirstRepository = await store.createOwnedRepository()
+        XCTAssertTrue(didCreateFirstRepository)
+        let firstRepository = try XCTUnwrap(store.currentRepository)
+        XCTAssertFalse(store.canRemoveRepository(firstRepository))
+
+        let didCreateSecondRepository = await store.createOwnedRepository()
+        XCTAssertTrue(didCreateSecondRepository)
+        let secondRepository = try XCTUnwrap(store.currentRepository)
+
+        XCTAssertTrue(store.canRemoveRepository(firstRepository))
+        XCTAssertFalse(store.canRemoveRepository(secondRepository))
+    }
+
+    @MainActor
+    func testStoreRemovesNonCurrentRepositoryAndKeepsCurrentSelection() async throws {
+        let namespace = "store-remove-\(UUID().uuidString)"
+        let sessionStore = RepositorySessionStore(namespace: namespace)
+        let tempRoot = try makeTemporaryDirectory()
+        let configuration = LibraryAppConfiguration(
+            cacheStore: LibraryCacheStore(rootURL: tempRoot.appendingPathComponent("cloudkit-cache", isDirectory: true)),
+            legacyImporter: LegacyLibraryImporter(storageRootURL: tempRoot),
+            sessionStore: sessionStore,
+            remoteService: InMemoryLibraryRemoteService(),
+            preferredOwnedRepositoryName: "我的家庭书库"
+        )
+
+        let store = LibraryStore(configuration: configuration)
+
+        let didCreateFirstRepository = await store.createOwnedRepository()
+        XCTAssertTrue(didCreateFirstRepository)
+        let firstRepository = try XCTUnwrap(store.currentRepository)
+
+        let didCreateSecondRepository = await store.createOwnedRepository()
+        XCTAssertTrue(didCreateSecondRepository)
+        let secondRepository = try XCTUnwrap(store.currentRepository)
+
+        let didRemove = await store.removeRepository(firstRepository)
+
+        XCTAssertTrue(didRemove)
+        XCTAssertEqual(store.availableRepositories.count, 1)
+        XCTAssertEqual(store.currentRepository?.id, secondRepository.id)
+        XCTAssertEqual(store.currentRepository?.databaseScope, secondRepository.databaseScope)
+        XCTAssertFalse(
+            store.availableRepositories.contains {
+                $0.id == firstRepository.id && $0.databaseScope == firstRepository.databaseScope
+            }
+        )
+    }
+
+    @MainActor
     func testStoreCanExportCurrentRepositoryAsZip() async throws {
         let namespace = "store-export-\(UUID().uuidString)"
         let sessionStore = RepositorySessionStore(namespace: namespace)

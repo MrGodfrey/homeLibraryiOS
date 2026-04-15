@@ -120,41 +120,7 @@ struct RepositoryManagementView: View {
                     .foregroundStyle(LibraryTheme.secondaryText)
             } else {
                 ForEach(store.availableRepositories) { repository in
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(repository.name)
-                                    .font(.body.weight(.semibold))
-                                    .foregroundStyle(LibraryTheme.title)
-                                Text("\(repository.role.title) · \(repository.databaseScope.title)")
-                                    .font(.footnote)
-                                    .foregroundStyle(LibraryTheme.secondaryText)
-                            }
-
-                            Spacer()
-
-                            if store.currentRepository?.id == repository.id &&
-                                store.currentRepository?.databaseScope == repository.databaseScope {
-                                Text("当前")
-                                    .font(.caption.weight(.bold))
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 5)
-                                    .foregroundStyle(LibraryTheme.bodyText)
-                                    .background(LibraryTheme.surfaceSecondary, in: Capsule())
-                            } else {
-                                Button("切换") {
-                                    Task {
-                                        await store.switchRepository(to: repository)
-                                    }
-                                }
-                            }
-                        }
-
-                        Text(repository.subtitle)
-                            .font(.footnote)
-                            .foregroundStyle(LibraryTheme.secondaryText)
-                    }
-                    .padding(.vertical, 4)
+                    repositoryRow(for: repository)
                 }
             }
 
@@ -337,6 +303,54 @@ struct RepositoryManagementView: View {
             sectionHeader("高级管理")
         }
         .listRowBackground(LibraryTheme.surface)
+    }
+
+    private func repositoryRow(for repository: LibraryRepositoryReference) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(repository.name)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(LibraryTheme.title)
+                    Text("\(repository.role.title) · \(repository.databaseScope.title)")
+                        .font(.footnote)
+                        .foregroundStyle(LibraryTheme.secondaryText)
+                }
+
+                Spacer()
+
+                if store.isCurrentRepository(repository) {
+                    Text("当前")
+                        .font(.caption.weight(.bold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .foregroundStyle(LibraryTheme.bodyText)
+                        .background(LibraryTheme.surfaceSecondary, in: Capsule())
+                } else {
+                    Button("切换") {
+                        Task {
+                            await store.switchRepository(to: repository)
+                        }
+                    }
+                }
+            }
+
+            Text(repository.subtitle)
+                .font(.footnote)
+                .foregroundStyle(LibraryTheme.secondaryText)
+        }
+        .padding(.vertical, 4)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if store.canRemoveRepository(repository) {
+                Button(role: .destructive) {
+                    Task {
+                        _ = await store.removeRepository(repository)
+                    }
+                } label: {
+                    Label("删除", systemImage: "trash")
+                }
+            }
+        }
     }
 
     private func handleLegacyImportSelection(_ result: Result<[URL], Error>) {

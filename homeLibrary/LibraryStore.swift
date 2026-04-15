@@ -76,6 +76,14 @@ final class LibraryStore: ObservableObject {
         currentRepository?.isOwner == true && remoteService is CloudKitLibraryService
     }
 
+    func isCurrentRepository(_ repository: LibraryRepositoryReference) -> Bool {
+        sameRepository(currentRepository, repository)
+    }
+
+    func canRemoveRepository(_ repository: LibraryRepositoryReference) -> Bool {
+        availableRepositories.count > 1 && !isCurrentRepository(repository)
+    }
+
     var cloudKitService: CloudKitLibraryService? {
         remoteService as? CloudKitLibraryService
     }
@@ -443,16 +451,33 @@ final class LibraryStore: ObservableObject {
         importProgress = nil
     }
 
-    func removeRepository(_ repository: LibraryRepositoryReference) async {
+    @discardableResult
+    func removeRepository(_ repository: LibraryRepositoryReference) async -> Bool {
+        guard availableRepositories.count > 1 else {
+            alertMessage = "至少保留一个可访问的仓库。"
+            return false
+        }
+
+        guard !isCurrentRepository(repository) else {
+            alertMessage = "不能删除当前正在使用的仓库。"
+            return false
+        }
+
         do {
+            let previousCurrentRepository = currentRepository
             try await remoteService.deleteRepository(repository)
-            if currentRepository?.id == repository.id && currentRepository?.databaseScope == repository.databaseScope {
-                sessionState.currentRepository = nil
-                persistSessionState()
+            try await clearCachedRepository(repositoryID: repository.id)
+            try await refreshAvailableRepositories(selecting: previousCurrentRepository)
+            persistSessionState()
+
+            if !sameRepository(previousCurrentRepository, sessionState.currentRepository) {
+                await loadBooks(force: true)
             }
-            await loadBooks(force: true)
+
+            return true
         } catch {
             alertMessage = Self.userFacingMessage(for: error)
+            return false
         }
     }
 
@@ -544,9 +569,12 @@ final class LibraryStore: ObservableObject {
         availableRepositories = repositories
 
         if let preferredRepository,
-           let resolvedRepository = repositories.first(where: { $0.id == preferredRepository.id && $0.databaseScope == preferredRepository.databaseScope }) {
+           let resolvedRepository = repositories.first(where: { sameRepository($0, preferredRepository) }) {
             sessionState.currentRepository = resolvedRepository
-        } else if sessionState.currentRepository == nil {
+        } else if let currentRepository = sessionState.currentRepository,
+                  let resolvedRepository = repositories.first(where: { sameRepository($0, currentRepository) }) {
+            sessionState.currentRepository = resolvedRepository
+        } else {
             sessionState.currentRepository = repositories.first(where: \.isOwner) ?? repositories.first
         }
     }
@@ -643,6 +671,13 @@ final class LibraryStore: ObservableObject {
         }
     }
 
+    private func clearCachedRepository(repositoryID: String) async throws {
+        let cacheStore = self.cacheStore
+        try await Task.detached(priority: .utility) {
+            try cacheStore.clearRepository(repositoryID)
+        }.value
+    }
+
     private func ensureOwnedRepositoryForImport() async throws -> LibraryRepositoryReference {
         if let currentRepository, currentRepository.isOwner {
             return currentRepository
@@ -705,5 +740,13 @@ final class LibraryStore: ObservableObject {
 
     private func currentRepositoryChanged(_ repository: LibraryRepositoryReference?) {
         currentRepository = repository
+    }
+
+    private func sameRepository(_ lhs: LibraryRepositoryReference?, _ rhs: LibraryRepositoryReference?) -> Bool {
+        guard let lhs, let rhs else {
+            return false
+        }
+
+        return lhs.id == rhs.id && lhs.databaseScope == rhs.databaseScope
     }
 }
