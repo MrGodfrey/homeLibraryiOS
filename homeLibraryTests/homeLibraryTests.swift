@@ -157,6 +157,18 @@ final class homeLibraryTests: XCTestCase {
         XCTAssertTrue(configuration.remoteService is InMemoryLibraryRemoteService)
     }
 
+    func testUserFacingMessageForCloudKitNetworkFailureIsReadable() {
+        let message = LibraryStore.userFacingMessage(for: LibraryRemoteServiceError.networkUnavailable)
+
+        XCTAssertEqual(message, "CloudKit 网络连接失败，请确认 iPhone 已联网并关闭代理或 VPN 后重试。")
+    }
+
+    func testUserFacingMessageForCloudKitServiceUnavailableIncludesRetryAfter() {
+        let message = LibraryStore.userFacingMessage(for: LibraryRemoteServiceError.serviceUnavailable(retryAfter: 3.2))
+
+        XCTAssertEqual(message, "CloudKit 当前繁忙，请在 4 秒后重试。")
+    }
+
     @MainActor
     func testStoreLeavesNewUserWithoutRepositoryWhenCloudIsEmpty() async throws {
         let namespace = "store-transition-\(UUID().uuidString)"
@@ -231,6 +243,94 @@ final class homeLibraryTests: XCTestCase {
         XCTAssertEqual(fetchOwnedRepositoryCallCount, 1)
         let createOwnedRepositoryCallCount = await remoteService.createOwnedRepositoryCallCountValue()
         XCTAssertEqual(createOwnedRepositoryCallCount, 0)
+    }
+
+    @MainActor
+    func testStoreRestoresCachedBooksBeforeRemoteRefreshCompletes() async throws {
+        let namespace = "store-cache-restore-\(UUID().uuidString)"
+        let sessionStore = RepositorySessionStore(namespace: namespace)
+        let ownerKey = "homeLibrary.repository.\(namespace).ownerProfileID"
+        let sessionKey = "homeLibrary.repository.\(namespace).session"
+        addTeardownBlock {
+            UserDefaults.standard.removeObject(forKey: ownerKey)
+            UserDefaults.standard.removeObject(forKey: sessionKey)
+        }
+
+        let currentRepository = LibraryRepositoryReference(
+            id: "cached-repository",
+            name: "我的家庭书库",
+            role: .owner,
+            accessAccount: "HL1001",
+            savedPassword: "PASS-1001"
+        )
+        sessionStore.save(
+            LibrarySessionState(
+                ownerProfileID: "owner-profile",
+                ownedRepository: currentRepository,
+                currentRepository: currentRepository
+            )
+        )
+
+        let tempRoot = try makeTemporaryDirectory()
+        let cacheStore = LibraryCacheStore(rootURL: tempRoot.appendingPathComponent("cloudkit-cache", isDirectory: true))
+        let cachedBook = Book(
+            id: "cached-book",
+            title: "缓存里的书",
+            author: "作者 A",
+            location: .chengdu,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
+        try cacheStore.replaceAllBooks(
+            [cachedBook],
+            coverDataByAssetID: [:],
+            repositoryID: currentRepository.id,
+            synchronizedAt: Date(timeIntervalSince1970: 2)
+        )
+
+        let remoteService = SlowFetchLibraryRemoteService(
+            repositoryDescriptor: RepositoryDescriptor(
+                id: currentRepository.id,
+                name: currentRepository.name,
+                ownerProfileID: "owner-profile",
+                accessAccount: currentRepository.accessAccount ?? "HL1001"
+            ),
+            snapshots: [
+                RemoteBookSnapshot(
+                    book: Book(
+                        id: "remote-book",
+                        title: "云端里的书",
+                        author: "作者 B",
+                        location: .chongqing,
+                        createdAt: Date(timeIntervalSince1970: 10),
+                        updatedAt: Date(timeIntervalSince1970: 11)
+                    ),
+                    coverData: nil
+                )
+            ]
+        )
+        let configuration = LibraryAppConfiguration(
+            cacheStore: cacheStore,
+            legacyImporter: LegacyLibraryImporter(storageRootURL: tempRoot),
+            sessionStore: sessionStore,
+            remoteService: remoteService,
+            preferredOwnedRepositoryName: "我的家庭书库"
+        )
+
+        let store = LibraryStore(configuration: configuration)
+        let loadTask = Task {
+            await store.loadBooks(force: true)
+        }
+
+        await remoteService.waitUntilFetchBooksStarts()
+
+        XCTAssertEqual(store.books.map(\.id), ["cached-book"])
+        XCTAssertFalse(store.isLoading)
+
+        await remoteService.resumeFetchBooks()
+        await loadTask.value
+
+        XCTAssertEqual(store.books.map(\.id), ["remote-book"])
     }
 
     @MainActor
@@ -419,5 +519,90 @@ private actor MockLibraryRemoteService: LibraryRemoteSyncing {
 
     func createOwnedRepositoryCallCountValue() -> Int {
         createOwnedRepositoryCallCount
+    }
+}
+
+private actor SlowFetchLibraryRemoteService: LibraryRemoteSyncing {
+    private let repositoryDescriptor: RepositoryDescriptor
+    private let snapshots: [RemoteBookSnapshot]
+
+    private var fetchBooksStarted = false
+    private var fetchBooksStartWaiters: [CheckedContinuation<Void, Never>] = []
+    private var fetchBooksResumeContinuation: CheckedContinuation<Void, Never>?
+
+    init(repositoryDescriptor: RepositoryDescriptor, snapshots: [RemoteBookSnapshot]) {
+        self.repositoryDescriptor = repositoryDescriptor
+        self.snapshots = snapshots
+    }
+
+    func fetchOwnedRepository(ownerProfileID: String) async throws -> RepositoryDescriptor? {
+        _ = ownerProfileID
+        return repositoryDescriptor
+    }
+
+    func createOwnedRepository(ownerProfileID: String, preferredName: String) async throws -> RepositoryBootstrapResult {
+        _ = ownerProfileID
+        _ = preferredName
+        throw XCTSkip("unused in this test")
+    }
+
+    func fetchRepository(id: String) async throws -> RepositoryDescriptor {
+        XCTAssertEqual(id, repositoryDescriptor.id)
+        return repositoryDescriptor
+    }
+
+    func joinRepository(account: String, password: String) async throws -> RepositoryDescriptor {
+        _ = account
+        _ = password
+        throw XCTSkip("unused in this test")
+    }
+
+    func rotateCredentials(for repositoryID: String, ownerProfileID: String) async throws -> RepositoryCredentials {
+        _ = repositoryID
+        _ = ownerProfileID
+        throw XCTSkip("unused in this test")
+    }
+
+    func fetchBooks(in repositoryID: String) async throws -> [RemoteBookSnapshot] {
+        XCTAssertEqual(repositoryID, repositoryDescriptor.id)
+        fetchBooksStarted = true
+        let waiters = fetchBooksStartWaiters
+        fetchBooksStartWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+
+        await withCheckedContinuation { continuation in
+            fetchBooksResumeContinuation = continuation
+        }
+
+        return snapshots
+    }
+
+    func upsertBook(_ book: Book, coverData: Data?, in repositoryID: String) async throws -> RemoteBookSnapshot {
+        _ = book
+        _ = coverData
+        _ = repositoryID
+        throw XCTSkip("unused in this test")
+    }
+
+    func deleteBook(id: String, deletedAt: Date, in repositoryID: String) async throws {
+        _ = id
+        _ = deletedAt
+        _ = repositoryID
+        throw XCTSkip("unused in this test")
+    }
+
+    func waitUntilFetchBooksStarts() async {
+        if fetchBooksStarted {
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            fetchBooksStartWaiters.append(continuation)
+        }
+    }
+
+    func resumeFetchBooks() {
+        fetchBooksResumeContinuation?.resume()
+        fetchBooksResumeContinuation = nil
     }
 }

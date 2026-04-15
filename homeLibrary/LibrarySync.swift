@@ -82,6 +82,11 @@ enum LibraryRemoteServiceError: LocalizedError {
     case noCloudAccount
     case permissionDenied
     case invalidCloudRecord
+    case networkUnavailable
+    case serviceUnavailable(retryAfter: TimeInterval?)
+    case accountTemporarilyUnavailable
+    case invalidContainerConfiguration
+    case missingEntitlement
     case unknown(String)
 
     var errorDescription: String? {
@@ -96,6 +101,20 @@ enum LibraryRemoteServiceError: LocalizedError {
             return "当前账号没有权限执行这个操作。"
         case .invalidCloudRecord:
             return "CloudKit 中的数据格式无法识别，请检查远端记录。"
+        case .networkUnavailable:
+            return "CloudKit 网络连接失败，请确认 iPhone 已联网并关闭代理或 VPN 后重试。"
+        case .serviceUnavailable(let retryAfter):
+            if let retryAfter, retryAfter > 0 {
+                return "CloudKit 当前繁忙，请在 \(Int(retryAfter.rounded(.up))) 秒后重试。"
+            }
+
+            return "CloudKit 当前不可用，请稍后再试。"
+        case .accountTemporarilyUnavailable:
+            return "当前 iCloud 账号暂时不可用于 CloudKit，请稍后重试。"
+        case .invalidContainerConfiguration:
+            return "CloudKit 容器配置无效，请检查 App ID、Bundle ID 和 iCloud 容器设置。"
+        case .missingEntitlement:
+            return "应用缺少 CloudKit 权限，请检查签名和 iCloud capability 配置。"
         case .unknown(let message):
             return message
         }
@@ -311,6 +330,9 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
 
     private let container: CKContainer
     private let database: CKDatabase
+    private var hasValidatedCloudAccount = false
+    private var cachedCurrentUserRecordID: CKRecord.ID?
+    private let maxRetryAttempts = 2
 
     init(containerIdentifier: String?) {
         if let containerIdentifier, !containerIdentifier.isEmpty {
@@ -520,11 +542,16 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
     }
 
     private func ensureCloudAccountAvailable() async throws {
+        if hasValidatedCloudAccount {
+            return
+        }
+
         do {
             let status = try await accountStatus()
 
             switch status {
             case .available:
+                hasValidatedCloudAccount = true
                 return
             case .noAccount:
                 throw LibraryRemoteServiceError.noCloudAccount
@@ -539,20 +566,30 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
     }
 
     private func accountStatus() async throws -> CKAccountStatus {
-        try await withCheckedThrowingContinuation { continuation in
-            container.accountStatus { status, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: status)
+        try await performRetryingCloudKitRequest {
+            try await withCheckedThrowingContinuation { continuation in
+                self.container.accountStatus { status, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume(returning: status)
+                    }
                 }
             }
         }
     }
 
     private func currentUserRecordID() async throws -> CKRecord.ID {
+        if let cachedCurrentUserRecordID {
+            return cachedCurrentUserRecordID
+        }
+
         do {
-            return try await container.userRecordID()
+            let recordID = try await performRetryingCloudKitRequest {
+                try await self.container.userRecordID()
+            }
+            cachedCurrentUserRecordID = recordID
+            return recordID
         } catch {
             throw mapCloudError(error)
         }
@@ -568,19 +605,21 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
 
     private func fetchRecordIfPresent(recordID: CKRecord.ID) async throws -> CKRecord? {
         do {
-            return try await withCheckedThrowingContinuation { continuation in
-                database.fetch(withRecordID: recordID) { record, error in
-                    if let ckError = error as? CKError, ckError.code == .unknownItem {
-                        continuation.resume(returning: nil)
-                        return
-                    }
+            return try await performRetryingCloudKitRequest {
+                try await withCheckedThrowingContinuation { continuation in
+                    self.database.fetch(withRecordID: recordID) { record, error in
+                        if let ckError = error as? CKError, ckError.code == .unknownItem {
+                            continuation.resume(returning: nil)
+                            return
+                        }
 
-                    if let error {
-                        continuation.resume(throwing: error)
-                        return
-                    }
+                        if let error {
+                            continuation.resume(throwing: error)
+                            return
+                        }
 
-                    continuation.resume(returning: record)
+                        continuation.resume(returning: record)
+                    }
                 }
             }
         } catch {
@@ -590,17 +629,19 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
 
     private func save(_ record: CKRecord) async throws -> CKRecord {
         do {
-            return try await withCheckedThrowingContinuation { continuation in
-                database.save(record) { savedRecord, error in
-                    if let error {
-                        continuation.resume(throwing: error)
-                        return
-                    }
+            return try await performRetryingCloudKitRequest {
+                try await withCheckedThrowingContinuation { continuation in
+                    self.database.save(record) { savedRecord, error in
+                        if let error {
+                            continuation.resume(throwing: error)
+                            return
+                        }
 
-                    if let savedRecord {
-                        continuation.resume(returning: savedRecord)
-                    } else {
-                        continuation.resume(throwing: LibraryRemoteServiceError.invalidCloudRecord)
+                        if let savedRecord {
+                            continuation.resume(returning: savedRecord)
+                        } else {
+                            continuation.resume(throwing: LibraryRemoteServiceError.invalidCloudRecord)
+                        }
                     }
                 }
             }
@@ -653,37 +694,81 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         desiredKeys: [String]?
     ) async throws -> (records: [CKRecord], cursor: CKQueryOperation.Cursor?) {
         do {
-            return try await withCheckedThrowingContinuation { continuation in
-                var records: [CKRecord] = []
-                let operation: CKQueryOperation = {
-                    if let cursor {
-                        return CKQueryOperation(cursor: cursor)
+            return try await performRetryingCloudKitRequest {
+                try await withCheckedThrowingContinuation { continuation in
+                    var records: [CKRecord] = []
+                    let operation: CKQueryOperation = {
+                        if let cursor {
+                            return CKQueryOperation(cursor: cursor)
+                        }
+
+                        return CKQueryOperation(query: query!)
+                    }()
+
+                    operation.resultsLimit = resultsLimit
+                    operation.desiredKeys = desiredKeys
+                    operation.recordMatchedBlock = { _, result in
+                        if case .success(let record) = result {
+                            records.append(record)
+                        }
+                    }
+                    operation.queryResultBlock = { result in
+                        switch result {
+                        case .success(let cursor):
+                            continuation.resume(returning: (records, cursor))
+                        case .failure(let error):
+                            continuation.resume(throwing: error)
+                        }
                     }
 
-                    return CKQueryOperation(query: query!)
-                }()
-
-                operation.resultsLimit = resultsLimit
-                operation.desiredKeys = desiredKeys
-                operation.recordMatchedBlock = { _, result in
-                    if case .success(let record) = result {
-                        records.append(record)
-                    }
+                    self.database.add(operation)
                 }
-                operation.queryResultBlock = { result in
-                    switch result {
-                    case .success(let cursor):
-                        continuation.resume(returning: (records, cursor))
-                    case .failure(let error):
-                        continuation.resume(throwing: error)
-                    }
-                }
-
-                database.add(operation)
             }
         } catch {
             throw mapCloudError(error)
         }
+    }
+
+    private func performRetryingCloudKitRequest<T>(
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        var attempt = 0
+
+        while true {
+            do {
+                return try await operation()
+            } catch {
+                guard let delay = Self.retryDelay(for: error, attempt: attempt, maxRetryAttempts: maxRetryAttempts) else {
+                    throw error
+                }
+
+                attempt += 1
+                try await Task.sleep(for: .seconds(delay))
+            }
+        }
+    }
+
+    nonisolated private static func retryDelay(
+        for error: Error,
+        attempt: Int,
+        maxRetryAttempts: Int
+    ) -> TimeInterval? {
+        guard attempt < maxRetryAttempts, let cloudError = error as? CKError else {
+            return nil
+        }
+
+        switch cloudError.code {
+        case .networkUnavailable, .networkFailure, .serverResponseLost:
+            return 0.75 * pow(2, Double(attempt))
+        case .serviceUnavailable, .requestRateLimited, .zoneBusy:
+            return retryAfter(for: cloudError) ?? (1.0 * pow(2, Double(attempt)))
+        default:
+            return nil
+        }
+    }
+
+    nonisolated private static func retryAfter(for error: CKError) -> TimeInterval? {
+        (error.userInfo[CKErrorRetryAfterKey] as? NSNumber)?.doubleValue
     }
 
     private func mapCloudError(_ error: Error) -> Error {
@@ -692,8 +777,18 @@ actor CloudKitLibraryService: LibraryRemoteSyncing {
         }
 
         switch error.code {
+        case .networkUnavailable, .networkFailure, .serverResponseLost:
+            return LibraryRemoteServiceError.networkUnavailable
+        case .serviceUnavailable, .requestRateLimited, .zoneBusy:
+            return LibraryRemoteServiceError.serviceUnavailable(retryAfter: Self.retryAfter(for: error))
+        case .badContainer:
+            return LibraryRemoteServiceError.invalidContainerConfiguration
+        case .missingEntitlement:
+            return LibraryRemoteServiceError.missingEntitlement
         case .notAuthenticated:
             return LibraryRemoteServiceError.noCloudAccount
+        case .accountTemporarilyUnavailable:
+            return LibraryRemoteServiceError.accountTemporarilyUnavailable
         case .permissionFailure:
             return LibraryRemoteServiceError.permissionDenied
         case .unknownItem:

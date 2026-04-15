@@ -7,6 +7,7 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+import ImageIO
 
 struct ContentView: View {
     @ObservedObject var store: LibraryStore
@@ -19,7 +20,7 @@ struct ContentView: View {
         NavigationStack {
             content
                 .navigationTitle("家藏万卷")
-                .searchable(text: $store.searchText, prompt: "搜索书名、作者或出版社")
+                .modifier(LibrarySearchModifier(searchText: $store.searchText, isEnabled: store.canSearch))
                 .toolbar {
                     ToolbarItemGroup(placement: .automatic) {
                         Button {
@@ -251,6 +252,20 @@ struct ContentView: View {
     }
 }
 
+private struct LibrarySearchModifier: ViewModifier {
+    @Binding var searchText: String
+    let isEnabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.searchable(text: $searchText, prompt: "搜索书名、作者或出版社")
+        } else {
+            content
+        }
+    }
+}
+
 private struct RepositoryPanel: View {
     let title: String
     let roleTitle: String
@@ -384,15 +399,16 @@ private struct BookThumbnail: View {
     let title: String
     let coverLoader: (String?) async -> Data?
 
-    @State private var coverData: Data?
+    @Environment(\.displayScale) private var displayScale
+    @State private var thumbnailImage: PlatformImage?
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color.secondary.opacity(0.08))
 
-            if let platformImage {
-                Image(uiImage: platformImage)
+            if let thumbnailImage {
+                Image(uiImage: thumbnailImage)
                     .resizable()
                     .scaledToFill()
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -412,16 +428,91 @@ private struct BookThumbnail: View {
             }
         }
         .task(id: assetID) {
-            coverData = await coverLoader(assetID)
+            await loadThumbnail()
         }
     }
 
-    private var platformImage: PlatformImage? {
-        guard let coverData else {
-            return nil
+    @MainActor
+    private func loadThumbnail() async {
+        guard let assetID else {
+            thumbnailImage = nil
+            return
         }
 
-        return PlatformImage(data: coverData)
+        let maxPixelSize = Int(92 * displayScale)
+
+        if let cachedImage = CoverThumbnailRenderer.cachedImage(for: assetID, maxPixelSize: maxPixelSize) {
+            thumbnailImage = cachedImage
+            return
+        }
+
+        guard let coverData = await coverLoader(assetID) else {
+            thumbnailImage = nil
+            return
+        }
+
+        guard !Task.isCancelled else {
+            return
+        }
+
+        let preparedImage = await Task.detached(priority: .utility) {
+            SendablePlatformImage(
+                image: CoverThumbnailRenderer.makeThumbnail(from: coverData, maxPixelSize: maxPixelSize)
+            )
+        }.value
+
+        guard !Task.isCancelled else {
+            return
+        }
+
+        if let image = preparedImage.image {
+            CoverThumbnailRenderer.store(image, for: assetID, maxPixelSize: maxPixelSize)
+        }
+
+        thumbnailImage = preparedImage.image
+    }
+}
+
+private struct SendablePlatformImage: @unchecked Sendable {
+    let image: PlatformImage?
+}
+
+private enum CoverThumbnailRenderer {
+    nonisolated(unsafe) private static let cache = NSCache<NSString, PlatformImage>()
+
+    nonisolated static func cachedImage(for assetID: String, maxPixelSize: Int) -> PlatformImage? {
+        cache.object(forKey: cacheKey(for: assetID, maxPixelSize: maxPixelSize))
+    }
+
+    nonisolated static func store(_ image: PlatformImage, for assetID: String, maxPixelSize: Int) {
+        cache.setObject(image, forKey: cacheKey(for: assetID, maxPixelSize: maxPixelSize))
+    }
+
+    nonisolated static func makeThumbnail(from data: Data, maxPixelSize: Int) -> PlatformImage? {
+        let sourceOptions: CFDictionary = [
+            kCGImageSourceShouldCache: false
+        ] as CFDictionary
+
+        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
+            return PlatformImage(data: data)
+        }
+
+        let thumbnailOptions: CFDictionary = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ] as CFDictionary
+
+        if let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions) {
+            return PlatformImage(cgImage: cgImage)
+        }
+
+        return PlatformImage(data: data)
+    }
+
+    nonisolated private static func cacheKey(for assetID: String, maxPixelSize: Int) -> NSString {
+        "\(assetID)#\(maxPixelSize)" as NSString
     }
 }
 

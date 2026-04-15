@@ -29,6 +29,7 @@ final class LibraryStore: ObservableObject {
 
     private var sessionState: LibrarySessionState
     private var hasLoaded = false
+    private var isLoadInFlight = false
     private var coverCache: [String: Data] = [:]
 
     init(configuration: LibraryAppConfiguration) {
@@ -52,6 +53,10 @@ final class LibraryStore: ObservableObject {
 
     var hasOwnedRepository: Bool {
         ownedRepository != nil
+    }
+
+    var canSearch: Bool {
+        hasLoaded && hasRepository
     }
 
     var repositoryTitle: String {
@@ -103,12 +108,16 @@ final class LibraryStore: ObservableObject {
     }
 
     func loadBooks(force: Bool = false) async {
-        guard force || !isLoading else {
+        guard !isLoadInFlight else {
             return
         }
 
-        isLoading = true
-        defer { isLoading = false }
+        isLoadInFlight = true
+        isLoading = books.isEmpty
+        defer {
+            isLoadInFlight = false
+            isLoading = false
+        }
 
         do {
             guard let repository = try await resolveCurrentRepositoryIfNeeded() else {
@@ -117,6 +126,12 @@ final class LibraryStore: ObservableObject {
                 syncStatus = .idle
                 hasLoaded = true
                 return
+            }
+
+            let didRestoreCachedBooks = await restoreCachedBooksIfAvailable(repositoryID: repository.id)
+            if didRestoreCachedBooks {
+                isLoading = false
+                hasLoaded = true
             }
 
             try await refreshFromCloud(repositoryID: repository.id)
@@ -430,8 +445,15 @@ final class LibraryStore: ObservableObject {
         let synchronizedAt = Date()
         try await replaceCache(with: snapshots, repositoryID: repositoryID, synchronizedAt: synchronizedAt)
         try await reloadFromCache(repositoryID: repositoryID)
-        try await reconcileRepositoryMetadata(for: repositoryID)
         syncStatus = .upToDate(synchronizedAt)
+
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            try? await self.reconcileRepositoryMetadata(for: repositoryID)
+        }
     }
 
     private func resolveCurrentRepositoryIfNeeded() async throws -> LibraryRepositoryReference? {
@@ -542,6 +564,15 @@ final class LibraryStore: ObservableObject {
         return try await Task.detached(priority: .utility) {
             try cacheStore.loadSnapshot(repositoryID: repositoryID)
         }.value
+    }
+
+    private func restoreCachedBooksIfAvailable(repositoryID: String) async -> Bool {
+        do {
+            try await reloadFromCache(repositoryID: repositoryID)
+            return !books.isEmpty
+        } catch {
+            return false
+        }
     }
 
     private func ensureOwnedRepositoryForMigration() async throws -> LibraryRepositoryReference {
