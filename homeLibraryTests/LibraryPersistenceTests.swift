@@ -155,6 +155,46 @@ final class LibraryPersistenceTests: XCTestCase {
         XCTAssertEqual(importedBooks.first?.coverData, Data("active-cover".utf8))
     }
 
+    func testLegacyImporterLoadsLegacyStructuredBooksWithISBNAndCoverAsset() throws {
+        let rootURL = try makeTemporaryDirectory()
+        let booksDirectoryURL = rootURL.appendingPathComponent("books", isDirectory: true)
+        let coversDirectoryURL = rootURL.appendingPathComponent("covers", isDirectory: true)
+        try FileManager.default.createDirectory(at: booksDirectoryURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: coversDirectoryURL, withIntermediateDirectories: true)
+
+        let legacyJSON = """
+        {
+          "id" : "legacy-book",
+          "title" : "旧书",
+          "author" : "作者 A",
+          "publisher" : "出版社 A",
+          "year" : "2024",
+          "isbn" : "9787111123456",
+          "location" : "成都",
+          "coverAssetID" : "cover-legacy",
+          "createdAt" : "\(LibraryJSONCodec.encodeDate(Date(timeIntervalSince1970: 1)))",
+          "updatedAt" : "\(LibraryJSONCodec.encodeDate(Date(timeIntervalSince1970: 2)))"
+        }
+        """
+
+        try Data(legacyJSON.utf8).write(
+            to: booksDirectoryURL.appendingPathComponent("legacy-book.json"),
+            options: [.atomic]
+        )
+        try Data("legacy-cover".utf8).write(
+            to: coversDirectoryURL.appendingPathComponent("cover-legacy.bin"),
+            options: [.atomic]
+        )
+
+        let importer = LegacyLibraryImporter(storageRootURL: rootURL)
+        let importedBooks = try importer.loadBooks()
+
+        XCTAssertEqual(importedBooks.count, 1)
+        XCTAssertEqual(importedBooks.first?.book.id, "legacy-book")
+        XCTAssertEqual(importedBooks.first?.book.customFields["ISBN"], "9787111123456")
+        XCTAssertEqual(importedBooks.first?.coverData, Data("legacy-cover".utf8))
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

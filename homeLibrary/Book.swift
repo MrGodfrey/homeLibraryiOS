@@ -39,6 +39,17 @@ nonisolated enum LibraryFilterTab: String, CaseIterable, Identifiable, Sendable 
 nonisolated struct BookPayload: Hashable, Codable, Sendable {
     nonisolated static let currentSchemaVersion = 1
 
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case title
+        case author
+        case publisher
+        case year
+        case location
+        case customFields
+        case isbn
+    }
+
     var schemaVersion: Int
     var title: String
     var author: String
@@ -64,9 +75,51 @@ nonisolated struct BookPayload: Hashable, Codable, Sendable {
         self.location = location
         self.customFields = customFields
     }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? Self.currentSchemaVersion
+        title = try container.decode(String.self, forKey: .title)
+        author = try container.decodeIfPresent(String.self, forKey: .author) ?? ""
+        publisher = try container.decodeIfPresent(String.self, forKey: .publisher) ?? ""
+        year = try container.decodeIfPresent(String.self, forKey: .year) ?? ""
+        location = try container.decode(BookLocation.self, forKey: .location)
+
+        var resolvedCustomFields = try container.decodeIfPresent([String: String].self, forKey: .customFields) ?? [:]
+        if let isbn = try container.decodeIfPresent(String.self, forKey: .isbn)?.trimmed.nilIfEmpty,
+           resolvedCustomFields["ISBN"]?.nilIfEmpty == nil {
+            resolvedCustomFields["ISBN"] = isbn
+        }
+        customFields = resolvedCustomFields
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(title, forKey: .title)
+        try container.encode(author, forKey: .author)
+        try container.encode(publisher, forKey: .publisher)
+        try container.encode(year, forKey: .year)
+        try container.encode(location, forKey: .location)
+        try container.encode(customFields, forKey: .customFields)
+    }
 }
 
 nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case author
+        case publisher
+        case year
+        case location
+        case customFields
+        case coverAssetID
+        case createdAt
+        case updatedAt
+        case isbn
+    }
+
     let id: String
     var title: String
     var author: String
@@ -100,6 +153,41 @@ nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
         self.coverAssetID = coverAssetID
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        author = try container.decodeIfPresent(String.self, forKey: .author) ?? ""
+        publisher = try container.decodeIfPresent(String.self, forKey: .publisher) ?? ""
+        year = try container.decodeIfPresent(String.self, forKey: .year) ?? ""
+        location = try container.decode(BookLocation.self, forKey: .location)
+
+        var resolvedCustomFields = try container.decodeIfPresent([String: String].self, forKey: .customFields) ?? [:]
+        if let isbn = try container.decodeIfPresent(String.self, forKey: .isbn)?.trimmed.nilIfEmpty,
+           resolvedCustomFields["ISBN"]?.nilIfEmpty == nil {
+            resolvedCustomFields["ISBN"] = isbn
+        }
+        customFields = resolvedCustomFields
+
+        coverAssetID = try container.decodeIfPresent(String.self, forKey: .coverAssetID)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(author, forKey: .author)
+        try container.encode(publisher, forKey: .publisher)
+        try container.encode(year, forKey: .year)
+        try container.encode(location, forKey: .location)
+        try container.encode(customFields, forKey: .customFields)
+        try container.encodeIfPresent(coverAssetID, forKey: .coverAssetID)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
     }
 
     nonisolated init(

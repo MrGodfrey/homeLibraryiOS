@@ -67,6 +67,24 @@ final class homeLibraryTests: XCTestCase {
         XCTAssertTrue(normalized.keepsExistingCoverReference)
     }
 
+    func testBookPayloadDecodesLegacyISBNIntoCustomFields() throws {
+        let json = """
+        {
+          "title" : "家庭书库",
+          "author" : "王宇",
+          "publisher" : "自有出版社",
+          "year" : "2026",
+          "isbn" : "9787111123456",
+          "location" : "成都"
+        }
+        """
+
+        let payload = try LibraryJSONCodec.makeDecoder().decode(BookPayload.self, from: Data(json.utf8))
+
+        XCTAssertEqual(payload.customFields["ISBN"], "9787111123456")
+        XCTAssertEqual(payload.schemaVersion, BookPayload.currentSchemaVersion)
+    }
+
     func testRepositorySessionStorePersistsRepositoriesPerNamespace() throws {
         let suiteName = "homeLibraryTests.session.\(UUID().uuidString)"
         let userDefaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))

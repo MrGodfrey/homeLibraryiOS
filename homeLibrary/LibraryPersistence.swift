@@ -473,24 +473,58 @@ nonisolated struct LegacyLibraryImporter: Sendable {
         var importedBooks: [LegacyImportedBook] = []
 
         for url in bookURLs {
-            let book = try decoder.decode(Book.self, from: Data(contentsOf: url))
+            let data = try Data(contentsOf: url)
+            let importedBook = try decodeStructuredImportedBook(
+                from: data,
+                coversDirectoryURL: coversDirectoryURL,
+                decoder: decoder
+            )
+            let book = importedBook.book
 
             if let tombstone = tombstonesByID[book.id], tombstone.deletedAt >= book.updatedAt {
                 continue
             }
 
-            let coverData: Data?
-            if let assetID = book.coverAssetID {
-                let assetURL = coversDirectoryURL.appendingPathComponent("\(assetID).bin")
-                coverData = FileManager.default.fileExists(atPath: assetURL.path) ? try Data(contentsOf: assetURL) : nil
-            } else {
-                coverData = nil
-            }
-
-            importedBooks.append(LegacyImportedBook(book: book, coverData: coverData))
+            importedBooks.append(importedBook)
         }
 
         return importedBooks
+    }
+
+    nonisolated private func decodeStructuredImportedBook(
+        from data: Data,
+        coversDirectoryURL: URL,
+        decoder: JSONDecoder
+    ) throws -> LegacyImportedBook {
+        let legacyBook = try? decoder.decode(LegacyBook.self, from: data)
+
+        do {
+            let book = try decoder.decode(Book.self, from: data)
+            let coverData = try coverData(
+                for: book.coverAssetID,
+                in: coversDirectoryURL
+            ) ?? legacyBook?.coverData
+            return LegacyImportedBook(book: book, coverData: coverData)
+        } catch {
+            if let legacyBook {
+                return makeImportedBook(from: legacyBook)
+            }
+
+            throw error
+        }
+    }
+
+    nonisolated private func coverData(for assetID: String?, in coversDirectoryURL: URL) throws -> Data? {
+        guard let assetID else {
+            return nil
+        }
+
+        let assetURL = coversDirectoryURL.appendingPathComponent("\(assetID).bin")
+        guard FileManager.default.fileExists(atPath: assetURL.path) else {
+            return nil
+        }
+
+        return try Data(contentsOf: assetURL)
     }
 
     nonisolated private func loadLegacyBooksJSON() throws -> [LegacyImportedBook] {
