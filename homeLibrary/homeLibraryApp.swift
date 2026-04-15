@@ -12,6 +12,7 @@ import SwiftUI
 struct homeLibraryApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = LibraryStore(configuration: .live())
+    @State private var didStartAutomation = false
 
     var body: some Scene {
         WindowGroup {
@@ -24,6 +25,14 @@ struct homeLibraryApp: App {
                     Task {
                         await store.acceptShareMetadata(metadata)
                     }
+                }
+                .task {
+                    guard !didStartAutomation else {
+                        return
+                    }
+
+                    didStartAutomation = true
+                    await CloudKitDualSimulatorAutomation.runIfNeeded(store: store)
                 }
         }
     }

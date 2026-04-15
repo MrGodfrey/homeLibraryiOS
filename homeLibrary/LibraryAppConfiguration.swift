@@ -59,6 +59,10 @@ struct LibraryAppConfiguration {
             "default"
         let containerIdentifier = environment["HOME_LIBRARY_CLOUDKIT_CONTAINER"]?.nilIfEmpty ??
             defaultCloudContainerIdentifier
+        let preferredOwnedRepositoryName = environment["HOME_LIBRARY_PREFERRED_REPOSITORY_NAME"]?.nilIfEmpty ??
+            bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ??
+            bundle.object(forInfoDictionaryKey: "CFBundleName") as? String ??
+            "我的家庭书库"
         return LibraryAppConfiguration(
             cacheStore: LibraryCacheStore(rootURL: storageRootURL.appendingPathComponent("cloudkit-cache", isDirectory: true)),
             legacyImporter: LegacyLibraryImporter(storageRootURL: storageRootURL),
@@ -67,9 +71,7 @@ struct LibraryAppConfiguration {
                 environment: environment,
                 containerIdentifier: containerIdentifier
             ),
-            preferredOwnedRepositoryName: bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ??
-                bundle.object(forInfoDictionaryKey: "CFBundleName") as? String ??
-                "我的家庭书库"
+            preferredOwnedRepositoryName: preferredOwnedRepositoryName
         )
     }
 

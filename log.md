@@ -101,3 +101,28 @@
 - `sharedCloudDatabase` 不适合沿用“整库 query”的仓库发现方式，更稳妥的做法是围绕共享 zone 和固定根记录组织模型。
 - 如果 CloudKit 失败，需要尽早保留操作名、数据库作用域、zone 名和映射后的用户可见错误；否则很难分辨是网络、权限、schema 还是共享约束导致的问题。
 - `Development` 和 `Production` 不需要两套数据格式；差异在 schema 发布与数据隔离，而不在业务模型。
+
+## 2026-04-15（双模拟器 CKShare live test）
+
+- 新增显式双模拟器 CloudKit 测试 harness：应用启动时如果注入 `HOME_LIBRARY_CLOUDKIT_AUTOMATION_COMMAND`，会进入只读于正常产品路径之外的 automation runner，按命令执行 owner/member 的共享与 CRUD 验证。
+- 新增 host 侧编排脚本：`scripts/run_dual_sim_cloudkit_share_test.swift` 负责构建、安装、驱动 `iPhone 17` 和 `testPhone2`，并在每一步通过结果文件轮询确认状态，不再靠手工点 UI。
+- 新增双端隔离策略：脚本为 owner/member 分别生成唯一 `HOME_LIBRARY_STORAGE_NAMESPACE` 和 `HOME_LIBRARY_SESSION_NAMESPACE`，避免污染你在 `testPhone2` 上的常用会话与缓存。
+- 新增仓库命名覆盖：`LibraryAppConfiguration.live()` 现在支持 `HOME_LIBRARY_PREFERRED_REPOSITORY_NAME`，让 live harness 能为每次运行生成唯一测试仓库名并精确定位 cleanup 目标。
+- 新增 CloudKit 调试辅助接口：`CloudKitLibraryService` 现在暴露 share URL / share metadata 辅助方法，供显式 live harness 使用。
+- 新增测试期开关：`HOME_LIBRARY_CLOUDKIT_AUTOMATION_ALLOW_PUBLIC_SHARE=1` 时，只对一次性测试 share 把 `CKShare.publicPermission` 提升到 `.readWrite`，以便无 UI 的双模拟器脚本通过 share URL 自动接受共享；正式产品共享仍保持 `UICloudSharingController` 的 private 路径。
+- 新增配置单测：覆盖 `HOME_LIBRARY_PREFERRED_REPOSITORY_NAME` 以及 `TEST_RUNNER_HOME_LIBRARY_PREFERRED_REPOSITORY_NAME` 的解析，确保 host-backed 测试可以稳定驱动唯一仓库名。
+
+### 验证记录
+
+- `Build iOS Apps / test_sim` 通过，`22` 个测试中 `21` 个通过、`1` 个 live 测试按预期跳过
+- `swift scripts/run_dual_sim_cloudkit_share_test.swift` 于 `2026-04-15` 在 booted `iPhone 17` 与 `testPhone2` 上通过：
+  - owner 创建仓库并共享
+  - member 接受共享后完成书籍新增、读取、修改、删除
+  - owner 验证更新和删除同步
+  - owner 删除测试仓库
+  - member 确认共享仓库已消失
+
+### CloudKit 经验结论
+
+- 仅凭 `CKShare.url` 还不足以让另一台设备自动接受一个 `publicPermission = .none` 且没有参与者的 share；要么先把参与者加进 share，要么像这次 harness 一样仅在显式测试环境里临时放宽成 link-based share。
+- 对双账号 live test，最重要的不是“能不能接受共享”这一瞬间，而是“跑完之后能否把 member 常用账号恢复干净”；因此脚本必须把远端仓库删除验证和 member 侧共享消失确认放进主流程，而不是留给人手工善后。

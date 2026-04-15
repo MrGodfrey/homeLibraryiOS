@@ -163,6 +163,27 @@ final class homeLibraryTests: XCTestCase {
         XCTAssertEqual(configuration.cacheStore.rootURL.lastPathComponent, "cloudkit-cache")
     }
 
+    func testLiveConfigurationUsesPreferredOwnedRepositoryNameOverride() {
+        let configuration = LibraryAppConfiguration.live(
+            environment: [
+                "HOME_LIBRARY_PREFERRED_REPOSITORY_NAME": "Dual Sim Owner Repo"
+            ]
+        )
+
+        XCTAssertEqual(configuration.preferredOwnedRepositoryName, "Dual Sim Owner Repo")
+    }
+
+    func testLiveConfigurationUsesTestRunnerPrefixedPreferredOwnedRepositoryNameOverride() {
+        let configuration = LibraryAppConfiguration.live(
+            environment: [
+                "XCTestConfigurationFilePath": "/tmp/test.xctestconfiguration",
+                "TEST_RUNNER_HOME_LIBRARY_PREFERRED_REPOSITORY_NAME": "Runner Repo"
+            ]
+        )
+
+        XCTAssertEqual(configuration.preferredOwnedRepositoryName, "Runner Repo")
+    }
+
     func testUserFacingMessageForCloudKitNetworkFailureIsReadable() {
         let message = LibraryStore.userFacingMessage(for: LibraryRemoteServiceError.networkUnavailable)
 

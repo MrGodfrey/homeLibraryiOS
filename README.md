@@ -243,7 +243,29 @@ HOME_LIBRARY_CLOUDKIT_LIVE_TESTS=1
 
 如果你用的是支持 test-runner env 的工具，需要把这些变量注入到测试运行器；当前代码也兼容 `TEST_RUNNER_` 前缀环境变量。
 
-### 6.3 当前已覆盖的真网能力
+### 6.3 双模拟器共享 live
+
+- 跨账号双模拟器共享：
+  - 脚本：`scripts/run_dual_sim_cloudkit_share_test.swift`
+  - owner：booted `iPhone 17`
+  - member：booted `testPhone2`
+  - 本地隔离：owner / member 各自独立 `storage namespace` 与 `session namespace`
+  - 远端隔离：每次运行都创建唯一仓库名和 `library.live-test.*` zone
+  - 收尾：owner 删除测试仓库，member 轮询确认共享仓库从 `sharedCloudDatabase` 消失
+
+- 双模拟器脚本当前验证：
+  - owner 创建测试仓库并生成 `CKShare`
+  - member 接受共享
+  - member 在共享仓库完成书籍新增、读取、修改、删除
+  - owner 验证 member 的修改与删除已同步
+  - 最终自动清理 owner / member 本地测试命名空间
+
+- 自动化约束说明：
+  - 为了让无 UI 的双模拟器脚本能稳定接受 share URL，脚本只在显式测试环境里把临时 `CKShare.publicPermission` 提升到 `.readWrite`
+  - 这条放宽只作用于一次性测试仓库，脚本结束后会删除远端仓库并确认 member 侧共享消失
+  - 正式产品共享路径仍然是 `UICloudSharingController` + private participant，不会因为这套测试 harness 变成公开共享
+
+### 6.4 当前已覆盖的真网能力
 
 - 创建专用测试仓库
 - 仓库发现
@@ -252,12 +274,15 @@ HOME_LIBRARY_CLOUDKIT_LIVE_TESTS=1
 - 导出仓库
 - 清空仓库
 - 自动清理测试仓库
+- 双账号共享加入
+- member 侧共享仓库 CRUD
+- owner 侧跨账号同步验证
 
-### 6.4 当前仍然保留为手动验收的内容
+### 6.5 当前仍然保留为手动验收的内容
 
-- 跨账号接受分享
 - owner 移除参与者后的权限变化
 - 真网 UI 层共享验收
+- 指定 Apple ID 私有邀请的完整系统分享面板流程
 
 ## 7. 仓库约定
 

@@ -76,6 +76,10 @@ final class LibraryStore: ObservableObject {
         currentRepository?.isOwner == true && remoteService is CloudKitLibraryService
     }
 
+    var cloudKitService: CloudKitLibraryService? {
+        remoteService as? CloudKitLibraryService
+    }
+
     var repositoryTitle: String {
         currentRepository?.name ?? "还没有仓库"
     }

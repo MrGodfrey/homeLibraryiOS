@@ -316,6 +316,7 @@ final class CloudKitLibraryService: NSObject, LibraryRemoteSyncing {
     private let privateDatabase: CKDatabase
     private let sharedDatabase: CKDatabase
     private let liveTestZonePrefix: String
+    private let sharePublicPermission: CKShare.ParticipantPermission
     private let logger = Logger(subsystem: "yu.homeLibrary", category: "CloudKit")
     private var hasValidatedCloudAccount = false
 
@@ -334,6 +335,7 @@ final class CloudKitLibraryService: NSObject, LibraryRemoteSyncing {
         privateDatabase = container.privateCloudDatabase
         sharedDatabase = container.sharedCloudDatabase
         liveTestZonePrefix = environment["HOME_LIBRARY_CLOUDKIT_LIVE_TESTS"] == "1" ? "library.live-test." : "library."
+        sharePublicPermission = environment["HOME_LIBRARY_CLOUDKIT_AUTOMATION_ALLOW_PUBLIC_SHARE"] == "1" ? .readWrite : .none
         super.init()
     }
 
@@ -526,6 +528,25 @@ final class CloudKitLibraryService: NSObject, LibraryRemoteSyncing {
         _ = try await container.accept([metadata])
     }
 
+    func shareMetadata(for url: URL) async throws -> CKShare.Metadata {
+        try await ensureCloudAccountAvailable()
+        return try await container.shareMetadata(for: url)
+    }
+
+    func shareURL(for repository: LibraryRepositoryReference) async throws -> URL {
+        guard repository.isOwner else {
+            throw LibraryRemoteServiceError.permissionDenied
+        }
+
+        try await ensureCloudAccountAvailable()
+        let share = try await fetchOrCreateZoneShare(for: repository)
+        guard let url = share.url else {
+            throw LibraryRemoteServiceError.shareNotAvailable
+        }
+
+        return url
+    }
+
     @MainActor
     func makeSharingController(for repository: LibraryRepositoryReference) async throws -> UICloudSharingController {
         guard repository.isOwner else {
@@ -544,12 +565,21 @@ final class CloudKitLibraryService: NSObject, LibraryRemoteSyncing {
 
         if let shareReference = zone.share,
            let existingShare = try await fetchRecordIfPresent(recordID: shareReference.recordID, in: privateDatabase, operationName: "fetchOrCreateZoneShare.fetchShare") as? CKShare {
+            if existingShare.publicPermission != sharePublicPermission {
+                existingShare.publicPermission = sharePublicPermission
+                guard let savedShare = try await saveRecord(existingShare, in: privateDatabase, operationName: "fetchOrCreateZoneShare.updateShare", zoneID: repository.zoneID) as? CKShare else {
+                    throw LibraryRemoteServiceError.invalidCloudRecord
+                }
+
+                return savedShare
+            }
+
             return existingShare
         }
 
         let share = CKShare(recordZoneID: repository.zoneID)
         share[CKShare.SystemFieldKey.title] = repository.name as CKRecordValue
-        share.publicPermission = .none
+        share.publicPermission = sharePublicPermission
 
         guard let savedShare = try await saveRecord(share, in: privateDatabase, operationName: "fetchOrCreateZoneShare.createShare", zoneID: repository.zoneID) as? CKShare else {
             throw LibraryRemoteServiceError.invalidCloudRecord
