@@ -1405,8 +1405,8 @@ Apple 官方说明，TestFlight build 的可测试期是 `90` 天。
 
 以后你每次给现有测试者发一个新版 TestFlight，直接照这个最短流程做：
 
-1. 在 Xcode 把 `Build` 加 1。
-2. `Archive -> Validate App -> Distribute App -> TestFlight & App Store`。
+1. 在 Xcode 中点击项目图标，targets，general 中把 `Build` 加 1。
+2. `Product -> Archive -> Validate App -> Distribute App -> TestFlight & App Store`。
 3. 去 App Store Connect 等 build 处理完成。
 4. 内部测试：
    - 如果没开自动分发，手动 `Add Builds`。
