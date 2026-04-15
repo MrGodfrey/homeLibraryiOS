@@ -15,7 +15,6 @@ struct ContentView: View {
     @State private var pendingDeleteBook: Book?
     @State private var selectedBookID: String?
     @State private var isShowingRepositorySheet = false
-    @State private var headerCollapseProgress: CGFloat = 0
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -81,30 +80,39 @@ struct ContentView: View {
     }
 
     private var libraryContent: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                headerIntro
-                    .padding(.top, 16)
-                    .padding(.bottom, 18)
+        VStack(spacing: 0) {
+            fixedHeader
 
-                Section {
-                    librarySection
-                        .padding(.top, 24)
-                } header: {
-                    headerControls
-                }
+            ScrollView {
+                librarySection
+                    .padding(.horizontal, 20)
+                    .padding(.top, 24)
+                    .padding(.bottom, 120)
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 120)
+            .background(LibraryTheme.background)
+            .scrollIndicators(.hidden)
+            .refreshable {
+                await store.loadBooks(force: true)
+            }
         }
-        .scrollIndicators(.hidden)
-        .refreshable {
-            await store.loadBooks(force: true)
+    }
+
+    private var fixedHeader: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            headerIntro
+            headerControls
         }
-        .onScrollGeometryChange(for: CGFloat.self, of: { scrollGeometry in
-            scrollGeometry.contentOffset.y + scrollGeometry.contentInsets.top
-        }) { _, offset in
-            headerCollapseProgress = max(0, min(offset / 88, 1))
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+        .padding(.bottom, 18)
+        .background {
+            LibraryTheme.background
+                .ignoresSafeArea(edges: .top)
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(LibraryTheme.divider)
+                        .frame(height: 1)
+                }
         }
     }
 
@@ -140,29 +148,13 @@ struct ContentView: View {
                 isShowingRepositorySheet = true
             }
         }
-        .opacity(1 - headerCollapseProgress)
-        .offset(y: -headerCollapseProgress * 14)
-        .scaleEffect(1 - headerCollapseProgress * 0.04, anchor: .topLeading)
-        .allowsHitTesting(!isHeaderCompact)
-        .animation(.snappy(duration: 0.22), value: isHeaderCompact)
     }
 
     private var headerControls: some View {
-        VStack(alignment: .leading, spacing: isHeaderCompact ? 10 : 14) {
-            searchBar(compact: isHeaderCompact)
-            locationFilterBar(compact: isHeaderCompact)
+        VStack(alignment: .leading, spacing: 14) {
+            searchBar()
+            locationFilterBar()
         }
-        .padding(.top, isHeaderCompact ? 8 : 0)
-        .padding(.bottom, isHeaderCompact ? 14 : 18)
-        .background {
-            LibraryTheme.background
-                .overlay(alignment: .bottom) {
-                    Rectangle()
-                        .fill(LibraryTheme.divider.opacity(isHeaderCompact ? 1 : 0))
-                        .frame(height: 1)
-                }
-        }
-        .animation(.snappy(duration: 0.22), value: isHeaderCompact)
     }
 
     private func headerActionButton(
@@ -183,16 +175,15 @@ struct ContentView: View {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(LibraryTheme.stroke, lineWidth: 1)
                 }
-                .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 4)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(identifier)
     }
 
-    private func searchBar(compact: Bool) -> some View {
+    private func searchBar() -> some View {
         HStack(spacing: 12) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: compact ? 18 : 20, weight: .medium))
+                .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(LibraryTheme.tertiaryText)
 
             TextField(
@@ -201,12 +192,12 @@ struct ContentView: View {
                 prompt: Text("搜索书名、作者或 ISBN")
                     .foregroundStyle(LibraryTheme.secondaryText)
             )
-                .textFieldStyle(.plain)
-                .font(.system(size: compact ? 16 : 18, weight: .medium))
-                .foregroundStyle(LibraryTheme.bodyText)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .accessibilityIdentifier("floatingSearchField")
+            .textFieldStyle(.plain)
+            .font(.system(size: 18, weight: .medium))
+            .foregroundStyle(LibraryTheme.bodyText)
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.never)
+            .accessibilityIdentifier("floatingSearchField")
 
             if !store.searchText.isEmpty {
                 Button {
@@ -220,22 +211,21 @@ struct ContentView: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, compact ? 16 : 18)
-        .padding(.vertical, compact ? 13 : 17)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 17)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(LibraryTheme.surface)
         )
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(LibraryTheme.stroke, lineWidth: 1)
         }
-        .shadow(color: Color.black.opacity(compact ? 0.02 : 0.035), radius: compact ? 8 : 12, x: 0, y: compact ? 2 : 5)
     }
 
-    private func locationFilterBar(compact: Bool) -> some View {
+    private func locationFilterBar() -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: compact ? 8 : 12) {
+            HStack(spacing: 12) {
                 ForEach(store.visibleLocationFilters) { filter in
                     Button {
                         withAnimation(.snappy(duration: 0.2)) {
@@ -244,10 +234,10 @@ struct ContentView: View {
                         }
                     } label: {
                         Text(filter.title)
-                            .font(.system(size: compact ? 14 : 16, weight: .semibold))
+                            .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(isActive(filter: filter) ? Color.white : LibraryTheme.bodyText)
-                            .padding(.horizontal, compact ? 16 : 20)
-                            .padding(.vertical, compact ? 10 : 14)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 14)
                             .background(
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                                     .fill(isActive(filter: filter) ? LibraryTheme.accent : LibraryTheme.surface)
@@ -256,12 +246,6 @@ struct ContentView: View {
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                                     .stroke(isActive(filter: filter) ? LibraryTheme.accent : LibraryTheme.stroke, lineWidth: 1)
                             }
-                            .shadow(
-                                color: isActive(filter: filter) ? LibraryTheme.accent.opacity(compact ? 0.12 : 0.18) : Color.black.opacity(compact ? 0.01 : 0.02),
-                                radius: compact ? 6 : 10,
-                                x: 0,
-                                y: compact ? 3 : 6
-                            )
                     }
                     .buttonStyle(.plain)
                 }
@@ -524,10 +508,6 @@ struct ContentView: View {
     private var hasActiveFilters: Bool {
         !store.searchText.trimmed.isEmpty || store.selectedLocationID != nil
     }
-
-    private var isHeaderCompact: Bool {
-        headerCollapseProgress > 0.62
-    }
 }
 private struct SyncStatusText: View {
     let status: LibrarySyncStatus
@@ -570,6 +550,8 @@ private extension LibrarySyncStatus {
 }
 
 private struct LibraryBookCard: View {
+    private static let coverAspectRatio: CGFloat = 0.72
+
     let book: Book
     let isSelected: Bool
     let coverLoader: (String?) async -> Data?
@@ -578,12 +560,11 @@ private struct LibraryBookCard: View {
     let onDelete: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             ZStack {
                 BookThumbnail(assetID: book.coverAssetID, coverLoader: coverLoader)
-                    .aspectRatio(0.72, contentMode: .fit)
+                    .aspectRatio(Self.coverAspectRatio, contentMode: .fit)
                     .frame(maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                 if isSelected {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -604,13 +585,15 @@ private struct LibraryBookCard: View {
                     }
                 }
             }
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(book.title)
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(LibraryTheme.title)
                     .lineLimit(2)
-                    .frame(minHeight: 52, alignment: .topLeading)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Text(book.displayAuthor)
                     .font(.system(size: 15, weight: .semibold))
@@ -673,7 +656,7 @@ private struct BookThumbnail: View {
                 Image(uiImage: thumbnailImage)
                     .resizable()
                     .scaledToFill()
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 VStack(spacing: 10) {
                     Image(systemName: "book.closed")
@@ -682,6 +665,8 @@ private struct BookThumbnail: View {
                 }
             }
         }
+        .clipped()
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .task(id: assetID) {
             await loadThumbnail()
         }
