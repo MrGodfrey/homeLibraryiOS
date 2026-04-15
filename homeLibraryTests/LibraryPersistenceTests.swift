@@ -291,6 +291,40 @@ final class LibraryPersistenceTests: XCTestCase {
         XCTAssertEqual(importedBundle.books.first?.book.customFields["备注"], "外部文件")
     }
 
+    func testLegacyImporterLoadsStructuredSeedFileWithoutLocationsArray() throws {
+        let rootURL = try makeTemporaryDirectory()
+        let importURL = rootURL.appendingPathComponent("SeedBooks.json")
+        let payload = """
+        {
+          "schemaVersion" : 1,
+          "source" : "unit-test-seed",
+          "exportedAt" : "\(LibraryJSONCodec.encodeDate(Date(timeIntervalSince1970: 5)))",
+          "books" : [
+            {
+              "id" : "seed-book",
+              "title" : "种子导入",
+              "author" : "作者 Seed",
+              "publisher" : "出版社 Seed",
+              "year" : "2025",
+              "location" : "成都",
+              "customFields" : {},
+              "createdAt" : "\(LibraryJSONCodec.encodeDate(Date(timeIntervalSince1970: 1)))",
+              "updatedAt" : "\(LibraryJSONCodec.encodeDate(Date(timeIntervalSince1970: 2)))"
+            }
+          ]
+        }
+        """
+        try Data(payload.utf8).write(to: importURL, options: [.atomic])
+
+        let importer = LegacyLibraryImporter(storageRootURL: rootURL)
+        let importedBundle = try importer.loadImportBundle(from: importURL)
+
+        XCTAssertEqual(importedBundle.locations.map(\.name), ["成都"])
+        XCTAssertEqual(importedBundle.books.count, 1)
+        XCTAssertEqual(importedBundle.books.first?.book.id, "seed-book")
+        XCTAssertEqual(importedBundle.books.first?.book.locationID, "location.chengdu")
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
