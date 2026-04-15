@@ -140,3 +140,18 @@
 - `Build iOS Apps / build_sim` 通过
 - `Build iOS Apps / test_sim -only-testing:homeLibraryUITests` 通过，`2` 个 UI 测试通过
 - `Build iOS Apps / test_sim -only-testing:homeLibraryTests` 通过，`20` 个测试中 `19` 个通过、`1` 个 live 测试按预期跳过
+
+## 2026-04-15（暗黑模式与表单页统一主题）
+
+- 抽出共享主题层：新增 `LibraryTheme.swift`，把背景、卡片、次级卡片、文字、描边、成功/失败状态等颜色统一改成支持亮色/暗色的动态配色。
+- 修正首页暗黑模式：书墙卡片、空态、进度条、设置按钮、地点切换、同步状态文字等全部切到动态主题，不再只有搜索框能正确适配暗黑模式。
+- 统一添加书籍页风格：保留原有表单交互，改用与首页一致的背景和卡片表面；分区标题、上传封面 / 移除封面操作行、封面占位底色统一到同一套视觉语言。
+- 统一仓库设置页风格：表单背景、分区卡片、当前仓库标记、地点配置、共享与高级管理按钮改为和首页一致的主题和操作行样式，暗黑模式下不再保留系统默认的浅色分组感。
+- 保持现有默认 UI 烟测路径不变，确保样式调整没有影响“建库 -> 添加 -> 搜索”的主流程。
+
+### 验证记录
+
+- `Build iOS Apps / build_sim` 通过
+- `Build iOS Apps / test_sim -only-testing:homeLibraryUITests` 通过，`2` 个 UI 测试通过
+- `Build iOS Apps / test_sim -only-testing:homeLibraryTests` 通过，`20` 个测试中 `19` 个通过、`1` 个 live 测试按预期跳过
+- 暗黑模式下手动检查首页与仓库设置页，动态主题已生效
