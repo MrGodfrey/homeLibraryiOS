@@ -242,3 +242,29 @@
 
 - `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,id=8CC688D1-06E8-4A1D-BC56-8AE8A52BA492' -only-testing:homeLibraryTests -only-testing:homeLibraryUITests test` 通过
 - 共执行 `46` 个测试，其中 `1` 个 CloudKit live 测试按预期跳过，其余全部通过
+
+## 2026-04-16（封面自动压缩与仓库整理）
+
+- 新增封面压缩器：上传、编辑和导入封面时，会先把过大的图片下采样并压缩到适合首页小图标展示的尺寸和体积。
+- 调整编辑页交互：选择封面后会立即执行压缩，处理中禁用保存并显示“正在压缩封面…”状态。
+- 扩展高级管理区：新增“整理当前仓库封面”按钮，扫描当前仓库已有封面并显示“已处理多少 / 已压缩多少张图片”的进度。
+- 补充自动化测试：新增 `LibraryCoverCompressionTests.swift`，覆盖封面压缩器、保存时自动压缩，以及仓库整理已有大图与进度回写；扩展现有 UI 测试，校验高级管理区里的新整理按钮可见。
+- 同步更新 `README.md`，补充封面自动压缩、仓库整理入口和最新测试覆盖说明。
+
+### 验证记录
+
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryTests test` 通过
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryTests -only-testing:homeLibraryUITests test` 通过
+- 共执行 `50` 个测试，其中 `1` 个 CloudKit live 测试按预期跳过，其余全部通过
+
+## 2026-04-16（封面整理确认弹窗与纯文字进度）
+
+- 调整封面整理入口：点击“整理当前仓库封面”后，先弹出确认 alert，明确提示“此操作会替换所有的封面”。
+- 调整高级管理展示：去掉整理进度前的进度条，改成纯文字状态，避免窄屏下一行放不下。
+- 更新 UI 测试：仓库设置页现在会校验封面整理的确认弹窗文案与取消操作。
+- 同步更新 `README.md`，补充封面整理需要再次确认和纯文字进度的当前行为说明。
+
+### 验证记录
+
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryTests -only-testing:homeLibraryUITests test` 通过
+- 共执行 `50` 个测试，其中 `1` 个 CloudKit live 测试按预期跳过，其余全部通过

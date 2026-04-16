@@ -42,6 +42,16 @@ final class homeLibraryUITests: XCTestCase {
         XCTAssertTrue(app.buttons["bookSortPicker"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["addLocationButton"].waitForExistence(timeout: 5))
         app.swipeUp()
+        let compressButton = app.buttons["compressRepositoryCoversButton"]
+        XCTAssertTrue(compressButton.waitForExistence(timeout: 5))
+        compressButton.tap()
+
+        let compressionAlert = app.alerts["确认整理当前仓库封面？"].firstMatch
+        XCTAssertTrue(compressionAlert.waitForExistence(timeout: 5))
+        XCTAssertTrue(compressionAlert.staticTexts["此操作会替换所有的封面。"].exists)
+        compressionAlert.buttons["取消"].tap()
+
+        XCTAssertTrue(compressButton.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["exportRepositoryButton"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["clearRepositoryButton"].waitForExistence(timeout: 5))
     }

@@ -180,7 +180,7 @@
 - 可以修改已有书籍的信息
 - 删除入口放在编辑页最底部，且删除前需要再次确认
 - 录入时支持填写书名、作者、出版社、出版年份和地点
-- 可以为图书添加或替换封面
+- 可以为图书添加或替换封面，选图后会自动压缩到适合小图标展示的尺寸和体积
 
 ### 6.4 仓库设置
 
@@ -191,7 +191,7 @@
 3. 给当前书库选择图书排序方式
 4. 管理地点列表，包括新增、删除、隐藏和排序
 5. 发起共享，邀请家人加入
-6. 导入旧数据、导出当前书库、清空当前书库
+6. 导入旧数据、整理当前仓库封面、导出当前仓库、清空当前仓库；整理封面前会再次确认
 
 ### 6.5 家庭协作
 
@@ -360,6 +360,8 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 - 封面二进制内容通过 `CKAsset` 存储
 - 同时生成 `coverAssetID`
 - 本地缓存按 `coverAssetID` 单独保存封面文件
+- 新增、编辑和导入封面时，会先把过大的图片压到适合小图标展示的尺寸和体积
+- 高级管理支持扫描当前仓库已有封面；整理前会再次确认，并以纯文字显示“已压缩多少张”的整理进度
 
 这让“书的数据”和“封面文件”可以分别管理，也让导出时更容易把封面重新嵌入到备份包里。
 
@@ -400,11 +402,11 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 
 ### 7.7 测试覆盖
 
-当前仓库共有 **39 个 XCTest**，外加 **1 个双模拟器共享验证脚本**。
+当前仓库共有 **50 个 XCTest**，外加 **1 个双模拟器共享验证脚本**。
 
 #### 7.7.1 单元与状态管理测试
 
-`homeLibraryTests/homeLibraryTests.swift` 当前包含 **27 个测试**，覆盖的重点包括：
+`homeLibraryTests/homeLibraryTests.swift` 当前包含 **30 个测试**，覆盖的重点包括：
 
 - 图书筛选
 - 默认排序与按作者/标题排序
@@ -420,6 +422,13 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 - 地点显隐与默认地点即时生效
 - 地点重排保存
 - 导入、导出、清空当前仓库
+
+`homeLibraryTests/LibraryCoverCompressionTests.swift` 当前包含 **4 个测试**，覆盖的重点包括：
+
+- 过大封面是否会被压到目标尺寸
+- 小封面是否保持原样
+- 保存书籍时是否会自动压缩上传封面
+- 仓库整理是否会压缩已有大图并回写进度
 
 #### 7.7.2 持久化与导入测试
 
@@ -449,20 +458,23 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 
 #### 7.7.4 UI 测试
 
-当前 UI 测试共有 **3 个**：
+当前 UI 测试本轮会执行 **7 个用例**：
 
 - `homeLibraryUITests/homeLibraryUITests.swift`
   - `testAddAndSearchBookOnIOS`
+  - `testTapBookCardOpensEditorAndDeleteRequiresConfirmation`
   - `testRepositorySettingsShowsBookSortAndManagementOptions`
 - `homeLibraryUITests/homeLibraryUITestsLaunchTests.swift`
-  - `testLaunch`
+  - `testLaunch`（按不同方向和明暗模式重复执行）
 
 它们覆盖的重点是：
 
 - 首次建库
 - 新增图书
 - 搜索图书
-- 仓库设置页关键入口
+- 点击书籍封面进入编辑页
+- 删除前二次确认
+- 仓库设置页关键入口，包括封面整理按钮与二次确认
 - 应用能否正常启动
 
 #### 7.7.5 双模拟器共享验证

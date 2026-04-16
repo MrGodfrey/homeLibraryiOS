@@ -16,6 +16,7 @@ struct RepositoryManagementView: View {
     @State private var draftLocations: [LibraryLocation] = []
     @State private var isShowingLegacyImportPicker = false
     @State private var isShowingClearConfirmation = false
+    @State private var isShowingCoverCompressionConfirmation = false
     @State private var activitySheetItem: ActivitySheetItem?
     @State private var sharingControllerItem: SharingControllerItem?
     @State private var incomingShareLink = ""
@@ -68,6 +69,16 @@ struct RepositoryManagementView: View {
                 Button("取消", role: .cancel) {}
             } message: {
                 Text("书籍和地点配置都会重置，当前仓库的缓存也会一起刷新。")
+            }
+            .alert("确认整理当前仓库封面？", isPresented: $isShowingCoverCompressionConfirmation) {
+                Button("取消", role: .cancel) {}
+                Button("确认整理", role: .destructive) {
+                    Task {
+                        _ = await store.compressOversizedCoversInCurrentRepository()
+                    }
+                }
+            } message: {
+                Text("此操作会替换所有的封面。")
             }
             .sheet(item: $activitySheetItem) { item in
                 ActivityView(activityItems: [item.url])
@@ -333,14 +344,25 @@ struct RepositoryManagementView: View {
 
     private var advancedManagementSection: some View {
         Section {
-            if let progress = store.importProgress {
-                HStack {
-                    ProgressView(value: Double(progress.importedCount), total: Double(max(progress.totalCount, 1)))
-                    Text(progress.statusText)
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(LibraryTheme.bodyText)
-                }
+            if let progress = store.coverCompressionProgress {
+                managementStatusText(progress.statusText)
             }
+
+            if let progress = store.importProgress {
+                managementStatusText(progress.statusText)
+            }
+
+            Button {
+                isShowingCoverCompressionConfirmation = true
+            } label: {
+                formActionLabel(
+                    title: store.isCompressingCovers ? "整理中..." : "整理当前仓库封面",
+                    systemName: "arrow.triangle.2.circlepath",
+                    tint: LibraryTheme.accent
+                )
+            }
+            .disabled(store.isCreatingRepository || store.isImportingLegacyData || store.isCompressingCovers)
+            .accessibilityIdentifier("compressRepositoryCoversButton")
 
             Button {
                 isShowingLegacyImportPicker = true
@@ -381,6 +403,15 @@ struct RepositoryManagementView: View {
             sectionHeader("高级管理")
         }
         .listRowBackground(LibraryTheme.surface)
+    }
+
+    private func managementStatusText(_ title: String) -> some View {
+        Text(title)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(LibraryTheme.bodyText)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("repositoryManagementStatusText")
     }
 
     private func repositoryRow(for repository: LibraryRepositoryReference) -> some View {

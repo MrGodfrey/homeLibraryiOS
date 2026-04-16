@@ -22,6 +22,7 @@ struct BookEditorView: View {
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var isSaving = false
     @State private var isDeleting = false
+    @State private var isProcessingCover = false
     @State private var activeAlert: EditorAlert?
 
     init(
@@ -79,7 +80,7 @@ struct BookEditorView: View {
                             await saveBook()
                         }
                     }
-                    .disabled(isSaving || isDeleting || !draft.canSave)
+                    .disabled(isSaving || isDeleting || isProcessingCover || !draft.canSave)
                     .accessibilityIdentifier("saveBookButton")
                 }
             }
@@ -134,6 +135,7 @@ struct BookEditorView: View {
                     tint: LibraryTheme.accent
                 )
             }
+            .disabled(isProcessingCover || isSaving || isDeleting)
             .accessibilityIdentifier("pickCoverButton")
 
             if draft.coverData != nil || draft.keepsExistingCoverReference {
@@ -149,7 +151,20 @@ struct BookEditorView: View {
                         textColor: LibraryTheme.destructive
                     )
                 }
+                .disabled(isProcessingCover || isSaving || isDeleting)
                 .accessibilityIdentifier("removeCoverButton")
+            }
+
+            if isProcessingCover {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .tint(LibraryTheme.accent)
+
+                    Text("正在压缩封面…")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(LibraryTheme.bodyText)
+                }
+                .accessibilityIdentifier("compressingCoverStatus")
             }
         }
         header: {
@@ -209,13 +224,24 @@ struct BookEditorView: View {
 
     @MainActor
     private func loadCover(from item: PhotosPickerItem) async {
+        isProcessingCover = true
+        defer { isProcessingCover = false }
+
         do {
             guard let data = try await item.loadTransferable(type: Data.self) else {
                 activeAlert = .message("读取封面失败，请换一张图片重试。")
                 return
             }
 
-            draft.coverData = data
+            let compressionResult = await Task.detached(priority: .utility) {
+                LibraryCoverCompressor.compressIfNeeded(data)
+            }.value
+
+            guard !Task.isCancelled else {
+                return
+            }
+
+            draft.coverData = compressionResult.data
             draft.keepsExistingCoverReference = false
         } catch {
             activeAlert = .message("读取封面失败，请换一张图片重试。")

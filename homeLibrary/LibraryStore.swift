@@ -59,8 +59,10 @@ final class LibraryStore: ObservableObject {
     @Published private(set) var currentRepository: LibraryRepositoryReference?
     @Published var alertMessage: String?
     @Published private(set) var importProgress: RepositoryImportProgress?
+    @Published private(set) var coverCompressionProgress: RepositoryCoverCompressionProgress?
     @Published private(set) var latestExportURL: URL?
     @Published private(set) var isAcceptingShareLink = false
+    @Published private(set) var isCompressingCovers = false
 
     private let configuration: LibraryAppConfiguration
     private let cacheStore: LibraryCacheStore
@@ -187,6 +189,7 @@ final class LibraryStore: ObservableObject {
                 locations = []
                 coverCache = [:]
                 syncStatus = .idle
+                coverCompressionProgress = nil
                 hasLoaded = true
                 return
             }
@@ -299,6 +302,7 @@ final class LibraryStore: ObservableObject {
 
         do {
             let now = Date()
+            let preparedCoverData = await optimizedCoverData(normalizedDraft.coverData)
             let preservedCoverAssetID = normalizedDraft.keepsExistingCoverReference ? existingBook?.coverAssetID : nil
             let book = Book(
                 id: existingBook?.id ?? UUID().uuidString,
@@ -314,7 +318,7 @@ final class LibraryStore: ObservableObject {
             )
 
             syncStatus = .syncing
-            let snapshot = try await remoteService.upsertBook(book, coverData: normalizedDraft.coverData, in: repository)
+            let snapshot = try await remoteService.upsertBook(book, coverData: preparedCoverData, in: repository)
             try await writeSnapshotToCache(snapshot, repositoryID: repository.id, synchronizedAt: now)
             syncStatus = .upToDate(now)
             try await reloadFromCache(repositoryID: repository.id)
@@ -429,7 +433,8 @@ final class LibraryStore: ObservableObject {
 
             syncStatus = .syncing
             for (index, imported) in bundle.books.sorted(by: { $0.book.updatedAt < $1.book.updatedAt }).enumerated() {
-                _ = try await remoteService.upsertBook(imported.book, coverData: imported.coverData, in: repository)
+                let preparedCoverData = await optimizedCoverData(imported.coverData)
+                _ = try await remoteService.upsertBook(imported.book, coverData: preparedCoverData, in: repository)
                 importProgress = RepositoryImportProgress(
                     phase: .importing,
                     totalCount: totalCount,
@@ -444,6 +449,107 @@ final class LibraryStore: ObservableObject {
             return true
         } catch {
             importProgress = nil
+            let message = Self.userFacingMessage(for: error)
+            alertMessage = message
+            syncStatus = .failed(message)
+            return false
+        }
+    }
+
+    @discardableResult
+    func compressOversizedCoversInCurrentRepository() async -> Bool {
+        guard let repository = currentRepository else {
+            alertMessage = "当前还没有仓库。"
+            return false
+        }
+
+        guard !isCompressingCovers else {
+            return false
+        }
+
+        let snapshot: LibraryCacheSnapshot
+        do {
+            snapshot = try await loadCacheSnapshot(repositoryID: repository.id)
+        } catch {
+            let message = Self.userFacingMessage(for: error)
+            alertMessage = message
+            syncStatus = .failed(message)
+            return false
+        }
+
+        var booksByAssetID: [String: [Book]] = [:]
+        for book in snapshot.books {
+            guard let assetID = book.coverAssetID else {
+                continue
+            }
+
+            booksByAssetID[assetID, default: []].append(book)
+        }
+
+        let assetIDs = booksByAssetID.keys.sorted()
+        guard !assetIDs.isEmpty else {
+            coverCompressionProgress = nil
+            alertMessage = "当前仓库没有可整理的封面。"
+            return false
+        }
+
+        isCompressingCovers = true
+        coverCompressionProgress = RepositoryCoverCompressionProgress(
+            phase: .running,
+            totalCount: assetIDs.count,
+            processedCount: 0,
+            compressedCount: 0
+        )
+        syncStatus = .syncing
+        defer { isCompressingCovers = false }
+
+        do {
+            var compressedCount = 0
+            let synchronizedAt = Date()
+
+            for (index, assetID) in assetIDs.enumerated() {
+                let originalData = try await cachedCoverData(for: assetID, repositoryID: repository.id)
+                let compressionResult = await compressedCoverResult(for: originalData)
+
+                if let compressionResult, compressionResult.didCompress {
+                    for book in booksByAssetID[assetID] ?? [] {
+                        let updatedSnapshot = try await remoteService.upsertBook(
+                            book,
+                            coverData: compressionResult.data,
+                            in: repository
+                        )
+                        try await writeSnapshotToCache(
+                            updatedSnapshot,
+                            repositoryID: repository.id,
+                            synchronizedAt: synchronizedAt
+                        )
+                    }
+                    compressedCount += 1
+                }
+
+                coverCompressionProgress = RepositoryCoverCompressionProgress(
+                    phase: .running,
+                    totalCount: assetIDs.count,
+                    processedCount: index + 1,
+                    compressedCount: compressedCount
+                )
+            }
+
+            try await reloadFromCache(repositoryID: repository.id)
+            let finishedAt = Date()
+            coverCompressionProgress = RepositoryCoverCompressionProgress(
+                phase: .completed,
+                totalCount: assetIDs.count,
+                processedCount: assetIDs.count,
+                compressedCount: compressedCount
+            )
+            syncStatus = .upToDate(finishedAt)
+            alertMessage = compressedCount == 0 ?
+                "已检查 \(assetIDs.count) 张封面，没有需要压缩的图片。" :
+                "当前仓库整理完成，已压缩 \(compressedCount) 张封面图片。"
+            return true
+        } catch {
+            coverCompressionProgress = nil
             let message = Self.userFacingMessage(for: error)
             alertMessage = message
             syncStatus = .failed(message)
@@ -872,6 +978,7 @@ final class LibraryStore: ObservableObject {
     private func currentRepositoryChanged(_ repository: LibraryRepositoryReference?) {
         currentRepository = repository
         bookSortOrder = sessionState.bookSortOrder(for: repository)
+        coverCompressionProgress = nil
     }
 
     private func sameRepository(_ lhs: LibraryRepositoryReference?, _ rhs: LibraryRepositoryReference?) -> Bool {
@@ -880,5 +987,32 @@ final class LibraryStore: ObservableObject {
         }
 
         return lhs.id == rhs.id && lhs.databaseScope == rhs.databaseScope
+    }
+
+    private func optimizedCoverData(_ data: Data?) async -> Data? {
+        guard let data, !data.isEmpty else {
+            return nil
+        }
+
+        return await Task.detached(priority: .utility) {
+            LibraryCoverCompressor.compressIfNeeded(data).data
+        }.value
+    }
+
+    private func compressedCoverResult(for data: Data?) async -> LibraryCoverCompressionResult? {
+        guard let data, !data.isEmpty else {
+            return nil
+        }
+
+        return await Task.detached(priority: .utility) {
+            LibraryCoverCompressor.compressIfNeeded(data)
+        }.value
+    }
+
+    private func cachedCoverData(for assetID: String, repositoryID: String) async throws -> Data? {
+        let cacheStore = self.cacheStore
+        return try await Task.detached(priority: .utility) {
+            try cacheStore.coverData(for: assetID, repositoryID: repositoryID)
+        }.value
     }
 }
