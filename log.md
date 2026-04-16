@@ -230,3 +230,15 @@
 - `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' build` 通过
 - `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryTests -only-testing:homeLibraryUITests test` 通过
 - 共执行 `44` 个测试，其中 `1` 个 CloudKit live 测试按预期跳过，其余全部通过
+
+## 2026-04-16（点封面直接编辑，删除入口收进编辑页）
+
+- 调整首页书墙交互：移除封面点击后的编辑/删除遮罩，改为点击书籍封面后直接进入编辑页。
+- 调整编辑页操作：在编辑书籍页最底部新增“删除书籍”按钮，删除前需要再次确认，删除成功后直接关闭编辑页。
+- 补充回归测试：新增 UI 测试，覆盖“点书籍卡片进入编辑页”和“删除前二次确认”；新增 `LibraryStore` 单测，覆盖删除后书籍列表刷新为空。
+- 同步更新 `README.md` 的录入、编辑、删除说明，确保当前交互与文档一致。
+
+### 验证记录
+
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,id=8CC688D1-06E8-4A1D-BC56-8AE8A52BA492' -only-testing:homeLibraryTests -only-testing:homeLibraryUITests test` 通过
+- 共执行 `46` 个测试，其中 `1` 个 CloudKit live 测试按预期跳过，其余全部通过

@@ -46,6 +46,44 @@ final class homeLibraryUITests: XCTestCase {
         XCTAssertTrue(app.buttons["clearRepositoryButton"].waitForExistence(timeout: 5))
     }
 
+    @MainActor
+    func testTapBookCardOpensEditorAndDeleteRequiresConfirmation() throws {
+        createOwnedRepositoryIfNeeded()
+
+        addBook(title: "重构", author: "Martin Fowler", publisher: "Addison-Wesley", year: "1999")
+
+        let firstBookCard = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'bookCard-'")).firstMatch
+        XCTAssertTrue(firstBookCard.waitForExistence(timeout: 5))
+
+        firstBookCard.tap()
+
+        let titleField = app.textFields["titleField"]
+        XCTAssertTrue(titleField.waitForExistence(timeout: 5))
+        XCTAssertEqual(titleField.value as? String, "重构")
+
+        let deleteButton = app.buttons["deleteBookButton"]
+        scrollToElement(deleteButton)
+        deleteButton.tap()
+
+        let deleteAlert = app.alerts["确认删除这本书？"].firstMatch
+        XCTAssertTrue(deleteAlert.waitForExistence(timeout: 5))
+        deleteAlert.buttons["暂不删除"].tap()
+
+        XCTAssertTrue(app.buttons["deleteBookButton"].waitForExistence(timeout: 5))
+        app.buttons["cancelBookButton"].tap()
+        XCTAssertTrue(firstBookCard.waitForExistence(timeout: 5))
+
+        firstBookCard.tap()
+        scrollToElement(deleteButton)
+        deleteButton.tap()
+
+        let confirmDeleteAlert = app.alerts["确认删除这本书？"].firstMatch
+        XCTAssertTrue(confirmDeleteAlert.waitForExistence(timeout: 5))
+        confirmDeleteAlert.buttons["确认删除"].tap()
+
+        XCTAssertTrue(waitForNonExistence(of: firstBookCard, timeout: 5))
+    }
+
     private func addBook(title: String, author: String, publisher: String, year: String) {
         app.buttons["addBookButton"].tap()
 
@@ -123,5 +161,29 @@ final class homeLibraryUITests: XCTestCase {
         } while Date() < deadline
 
         return false
+    }
+
+    private func scrollToElement(_ element: XCUIElement, maxSwipes: Int = 6) {
+        XCTAssertTrue(element.waitForExistence(timeout: 5))
+
+        for _ in 0..<maxSwipes where !element.isHittable {
+            app.swipeUp()
+        }
+
+        XCTAssertTrue(element.isHittable)
+    }
+
+    private func waitForNonExistence(of element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+
+        repeat {
+            if !element.exists {
+                return true
+            }
+
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } while Date() < deadline
+
+        return !element.exists
     }
 }

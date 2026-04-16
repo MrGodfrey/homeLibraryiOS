@@ -13,8 +13,6 @@ struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var editorTarget: EditorTarget?
-    @State private var pendingDeleteBook: Book?
-    @State private var selectedBookID: String?
     @State private var isShowingRepositorySheet = false
     @State private var libraryContentWidth: CGFloat = 0
 
@@ -40,31 +38,13 @@ struct ContentView: View {
                 editingBook: target.book,
                 initialCoverData: target.initialCoverData,
                 locations: store.locations.isEmpty ? LibraryLocation.defaultLocations() : store.locations,
-                defaultLocationID: target.defaultLocationID
+                defaultLocationID: target.defaultLocationID,
+                onDelete: { book in
+                    await store.deleteBook(book)
+                }
             ) { draft, book in
                 await store.saveBook(draft: draft, editing: book)
             }
-        }
-        .confirmationDialog("确认删除这本书？", isPresented: deleteDialogBinding, titleVisibility: .visible) {
-            if let pendingDeleteBook {
-                Button("删除", role: .destructive) {
-                    Task {
-                        let didDelete = await store.deleteBook(pendingDeleteBook)
-                        if didDelete {
-                            self.pendingDeleteBook = nil
-                            if selectedBookID == pendingDeleteBook.id {
-                                selectedBookID = nil
-                            }
-                        }
-                    }
-                }
-            }
-
-            Button("取消", role: .cancel) {
-                pendingDeleteBook = nil
-            }
-        } message: {
-            Text("删除后会立即写入当前仓库。")
         }
         .alert("提示", isPresented: alertBinding) {
             Button("知道了", role: .cancel) {
@@ -206,7 +186,6 @@ struct ContentView: View {
             if !store.searchText.isEmpty {
                 Button {
                     store.searchText = ""
-                    selectedBookID = nil
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 18, weight: .medium))
@@ -234,7 +213,6 @@ struct ContentView: View {
                     Button {
                         withAnimation(.snappy(duration: 0.2)) {
                             store.selectedLocationID = filter.locationID
-                            selectedBookID = nil
                         }
                     } label: {
                         Text(filter.title)
@@ -302,26 +280,15 @@ struct ContentView: View {
                 LibraryBookCard(
                     book: book,
                     cardWidth: layout.cardWidth,
-                    isSelected: selectedBookID == book.id,
                     coverLoader: store.coverData(for:),
                     onTap: {
-                        withAnimation(.snappy(duration: 0.2)) {
-                            selectedBookID = selectedBookID == book.id ? nil : book.id
-                        }
-                    },
-                    onEdit: {
-                        selectedBookID = nil
                         editorTarget = .edit(
                             book,
                             initialCoverData: store.coverDataSynchronously(for: book.coverAssetID),
                             defaultLocationID: book.locationID
                         )
-                    },
-                    onDelete: {
-                        pendingDeleteBook = book
                     }
                 )
-                .accessibilityIdentifier("bookCard-\(book.id)")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -487,17 +454,6 @@ struct ContentView: View {
         return "当前设备还没有可访问的家庭书库。"
     }
 
-    private var deleteDialogBinding: Binding<Bool> {
-        Binding(
-            get: { pendingDeleteBook != nil },
-            set: { isPresented in
-                if !isPresented {
-                    pendingDeleteBook = nil
-                }
-            }
-        )
-    }
-
     private var alertBinding: Binding<Bool> {
         Binding(
             get: { store.alertMessage != nil },
@@ -573,81 +529,31 @@ private struct LibraryBookCard: View {
 
     let book: Book
     let cardWidth: CGFloat
-    let isSelected: Bool
     let coverLoader: (String?) async -> Data?
     let onTap: () -> Void
-    let onEdit: () -> Void
-    let onDelete: () -> Void
 
     private var coverHeight: CGFloat {
         cardWidth / Self.coverAspectRatio
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ZStack {
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 6) {
                 BookThumbnail(assetID: book.coverAssetID, coverLoader: coverLoader)
                     .frame(width: cardWidth, height: coverHeight)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
-                if isSelected {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.black.opacity(0.22))
-
-                    HStack(spacing: 14) {
-                        overlayButton(
-                            systemName: "pencil",
-                            identifier: "editBook-\(book.id)",
-                            action: onEdit
-                        )
-
-                        overlayButton(
-                            systemName: "trash",
-                            identifier: "deleteBook-\(book.id)",
-                            action: onDelete
-                        )
-                    }
-                }
+                Text(book.title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(LibraryTheme.bodyText)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(width: cardWidth, height: coverHeight)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay {
-                if isSelected {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(LibraryTheme.accent.opacity(0.45), lineWidth: 2)
-                }
-            }
-
-            Text(book.title)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(LibraryTheme.bodyText)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(width: cardWidth, alignment: .topLeading)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onTap)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction { onTap() }
-    }
-
-    private func overlayButton(
-        systemName: String,
-        identifier: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(LibraryTheme.icon)
-                .frame(width: 50, height: 50)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(LibraryTheme.surface)
-                )
+            .frame(width: cardWidth, alignment: .topLeading)
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier(identifier)
+        .accessibilityIdentifier("bookCard-\(book.id)")
     }
 }
 

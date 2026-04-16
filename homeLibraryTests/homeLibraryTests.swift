@@ -677,6 +677,44 @@ final class homeLibraryTests: XCTestCase {
     }
 
     @MainActor
+    func testStoreDeleteBookRemovesSavedBook() async throws {
+        let namespace = "store-delete-book-\(UUID().uuidString)"
+        let sessionStore = RepositorySessionStore(namespace: namespace)
+        let tempRoot = try makeTemporaryDirectory()
+        let configuration = LibraryAppConfiguration(
+            cacheStore: LibraryCacheStore(rootURL: tempRoot.appendingPathComponent("cloudkit-cache", isDirectory: true)),
+            legacyImporter: LegacyLibraryImporter(storageRootURL: tempRoot),
+            sessionStore: sessionStore,
+            remoteService: InMemoryLibraryRemoteService(),
+            preferredOwnedRepositoryName: "我的家庭书库"
+        )
+
+        let store = LibraryStore(configuration: configuration)
+        let didCreateRepository = await store.createOwnedRepository()
+        XCTAssertTrue(didCreateRepository)
+
+        let didSaveBook = await store.saveBook(
+            draft: BookDraft(
+                title: "可删除的书",
+                author: "测试作者",
+                publisher: "测试出版社",
+                year: "2026",
+                locationID: store.defaultLocationID,
+                coverData: nil
+            ),
+            editing: nil
+        )
+        XCTAssertTrue(didSaveBook)
+
+        let book = try XCTUnwrap(store.books.first)
+        let didDeleteBook = await store.deleteBook(book)
+
+        XCTAssertTrue(didDeleteBook)
+        XCTAssertTrue(store.books.isEmpty)
+        XCTAssertTrue(store.visibleBooks.isEmpty)
+    }
+
+    @MainActor
     func testStoreImportNormalizesSeedLocationNamesIntoUsableLocationIDs() async throws {
         let namespace = "store-seed-import-\(UUID().uuidString)"
         let sessionStore = RepositorySessionStore(namespace: namespace)

@@ -13,6 +13,7 @@ struct BookEditorView: View {
     let initialCoverData: Data?
     let locations: [LibraryLocation]
     let defaultLocationID: String
+    let onDelete: ((Book) async -> Bool)?
     let onSave: (BookDraft, Book?) async -> Bool
 
     @Environment(\.dismiss) private var dismiss
@@ -20,19 +21,22 @@ struct BookEditorView: View {
     @State private var draft: BookDraft
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var isSaving = false
-    @State private var alertMessage: String?
+    @State private var isDeleting = false
+    @State private var activeAlert: EditorAlert?
 
     init(
         editingBook: Book?,
         initialCoverData: Data?,
         locations: [LibraryLocation],
         defaultLocationID: String,
+        onDelete: ((Book) async -> Bool)? = nil,
         onSave: @escaping (BookDraft, Book?) async -> Bool
     ) {
         self.editingBook = editingBook
         self.initialCoverData = initialCoverData
         self.locations = locations
         self.defaultLocationID = defaultLocationID
+        self.onDelete = onDelete
         self.onSave = onSave
         _draft = State(initialValue: BookDraft(
             book: editingBook,
@@ -46,6 +50,10 @@ struct BookEditorView: View {
             Form {
                 informationSection
                 coverSection
+
+                if editingBook != nil {
+                    deleteSection
+                }
             }
             .libraryFormChrome()
             .listSectionSpacing(18)
@@ -59,16 +67,19 @@ struct BookEditorView: View {
                     Button("取消") {
                         dismiss()
                     }
+                    .disabled(isSaving || isDeleting)
                     .accessibilityIdentifier("cancelBookButton")
                 }
 
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(isSaving ? "保存中..." : (editingBook == nil ? "确认添加" : "保存修改")) {
+                    Button(
+                        isSaving ? "保存中..." : (editingBook == nil ? "确认添加" : "保存修改")
+                    ) {
                         Task {
                             await saveBook()
                         }
                     }
-                    .disabled(isSaving || !draft.canSave)
+                    .disabled(isSaving || isDeleting || !draft.canSave)
                     .accessibilityIdentifier("saveBookButton")
                 }
             }
@@ -79,12 +90,8 @@ struct BookEditorView: View {
 
                 await loadCover(from: selectedPhotoItem)
             }
-            .alert("提示", isPresented: alertBinding) {
-                Button("知道了", role: .cancel) {
-                    alertMessage = nil
-                }
-            } message: {
-                Text(alertMessage ?? "")
+            .alert(item: $activeAlert) { alert in
+                makeAlert(for: alert)
             }
         }
     }
@@ -151,6 +158,26 @@ struct BookEditorView: View {
         .listRowBackground(LibraryTheme.surface)
     }
 
+    private var deleteSection: some View {
+        Section {
+            Button(role: .destructive) {
+                activeAlert = .deleteConfirmation
+            } label: {
+                formActionLabel(
+                    title: "删除书籍",
+                    systemName: "trash",
+                    tint: LibraryTheme.destructive,
+                    textColor: LibraryTheme.destructive
+                )
+            }
+            .disabled(isSaving || isDeleting)
+            .accessibilityIdentifier("deleteBookButton")
+        } header: {
+            sectionHeader("危险操作")
+        }
+        .listRowBackground(LibraryTheme.surface)
+    }
+
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
             .font(.system(size: 13, weight: .semibold))
@@ -180,29 +207,18 @@ struct BookEditorView: View {
         }
     }
 
-    private var alertBinding: Binding<Bool> {
-        Binding(
-            get: { alertMessage != nil },
-            set: { isPresented in
-                if !isPresented {
-                    alertMessage = nil
-                }
-            }
-        )
-    }
-
     @MainActor
     private func loadCover(from item: PhotosPickerItem) async {
         do {
             guard let data = try await item.loadTransferable(type: Data.self) else {
-                alertMessage = "读取封面失败，请换一张图片重试。"
+                activeAlert = .message("读取封面失败，请换一张图片重试。")
                 return
             }
 
             draft.coverData = data
             draft.keepsExistingCoverReference = false
         } catch {
-            alertMessage = "读取封面失败，请换一张图片重试。"
+            activeAlert = .message("读取封面失败，请换一张图片重试。")
         }
     }
 
@@ -215,6 +231,58 @@ struct BookEditorView: View {
 
         if didSave {
             dismiss()
+        }
+    }
+
+    @MainActor
+    private func deleteBook() async {
+        guard let editingBook, let onDelete else {
+            return
+        }
+
+        isDeleting = true
+        defer { isDeleting = false }
+
+        let didDelete = await onDelete(editingBook)
+
+        if didDelete {
+            dismiss()
+        }
+    }
+
+    private func makeAlert(for alert: EditorAlert) -> Alert {
+        switch alert {
+        case .message(let message):
+            return Alert(
+                title: Text("提示"),
+                message: Text(message),
+                dismissButton: .cancel(Text("知道了"))
+            )
+        case .deleteConfirmation:
+            return Alert(
+                title: Text("确认删除这本书？"),
+                message: Text("删除后会立即写入当前仓库。"),
+                primaryButton: .destructive(Text("确认删除")) {
+                    Task {
+                        await deleteBook()
+                    }
+                },
+                secondaryButton: .cancel(Text("暂不删除"))
+            )
+        }
+    }
+}
+
+private enum EditorAlert: Identifiable {
+    case message(String)
+    case deleteConfirmation
+
+    var id: String {
+        switch self {
+        case .message(let message):
+            return "message-\(message)"
+        case .deleteConfirmation:
+            return "delete-confirmation"
         }
     }
 }
