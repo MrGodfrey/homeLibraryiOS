@@ -168,3 +168,14 @@
 - `Build iOS Apps / build_sim` 通过
 - iPhone 17 模拟器启动后通过辅助树确认 `addBookButton` 位于 `repositoryManagementButton` 左侧，且两者尺寸一致
 - 暗黑模式下手动截图确认首页顶部绿色添加按钮、白色加号和整体对比度正常
+
+## 2026-04-16（修复切换仓库时地点列表崩溃）
+
+- 修复仓库设置页地点列表的 SwiftUI 绑定方式：不再对 `draftLocations` 使用下标驱动的 `$array` 绑定，改为按地点 `id` 生成安全 binding，避免切换仓库时整组地点数组被替换后 `Toggle` 仍访问旧下标而触发越界崩溃。
+- 补充仓库切换测试：新增 `LibraryStore` 单测，覆盖两个仓库之间来回切换后，地点列表会刷新为对应仓库的数据。
+- 修正测试工程配置：`homeLibraryTests` 的 `TEST_HOST` 仍指向旧的 `homeLibrary.app/homeLibrary`，主 target 的 Swift module 名也被 `PRODUCT_NAME=家藏万卷` 带成中文，导致 `@testable import homeLibrary` 无法编译；现已固定为中文产物名 + `homeLibrary` 模块名，测试链路恢复可用。
+
+### 验证记录
+
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,id=8CC688D1-06E8-4A1D-BC56-8AE8A52BA492' -only-testing:homeLibraryTests test` 通过
+- `28` 个测试执行完成，`27` 个通过，`1` 个 CloudKit live 测试按预期跳过

@@ -182,12 +182,13 @@ struct RepositoryManagementView: View {
 
     private var locationsSection: some View {
         Section {
-            ForEach($draftLocations) { $location in
+            ForEach(draftLocations) { location in
+                let locationBinding = draftLocationBinding(for: location)
                 VStack(alignment: .leading, spacing: 8) {
-                    TextField("地点名称", text: $location.name)
+                    TextField("地点名称", text: locationBinding.name)
 
                     HStack {
-                        Toggle("显示在首页筛选中", isOn: $location.isVisible)
+                        Toggle("显示在首页筛选中", isOn: locationBinding.isVisible)
 
                         Spacer()
 
@@ -452,6 +453,23 @@ struct RepositoryManagementView: View {
 
     private func syncDraftLocations() {
         draftLocations = store.locations.isEmpty ? LibraryLocation.defaultLocations() : store.locations
+    }
+
+    private func draftLocationBinding(for location: LibraryLocation) -> Binding<LibraryLocation> {
+        // Repository switches replace the whole locations array. Keep this binding ID-based so
+        // SwiftUI does not hold on to a stale array index while the Toggle is reconciling.
+        Binding(
+            get: {
+                draftLocations.first(where: { $0.id == location.id }) ?? location
+            },
+            set: { updatedLocation in
+                guard let index = draftLocations.firstIndex(where: { $0.id == location.id }) else {
+                    return
+                }
+
+                draftLocations[index] = updatedLocation
+            }
+        )
     }
 
     private func normalizedDraftLocations() -> [LibraryLocation] {

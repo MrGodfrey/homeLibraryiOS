@@ -342,6 +342,48 @@ final class homeLibraryTests: XCTestCase {
     }
 
     @MainActor
+    func testStoreSwitchesRepositoriesAndLoadsMatchingLocations() async throws {
+        let namespace = "store-switch-\(UUID().uuidString)"
+        let sessionStore = RepositorySessionStore(namespace: namespace)
+        let tempRoot = try makeTemporaryDirectory()
+        let configuration = LibraryAppConfiguration(
+            cacheStore: LibraryCacheStore(rootURL: tempRoot.appendingPathComponent("cloudkit-cache", isDirectory: true)),
+            legacyImporter: LegacyLibraryImporter(storageRootURL: tempRoot),
+            sessionStore: sessionStore,
+            remoteService: InMemoryLibraryRemoteService(),
+            preferredOwnedRepositoryName: "我的家庭书库"
+        )
+
+        let store = LibraryStore(configuration: configuration)
+
+        let didCreateFirstRepository = await store.createOwnedRepository()
+        XCTAssertTrue(didCreateFirstRepository)
+        let firstRepository = try XCTUnwrap(store.currentRepository)
+        let didSaveFirstLocations = await store.saveLocations([
+            LibraryLocation(id: "study", name: "书房", sortOrder: 0)
+        ])
+        XCTAssertTrue(didSaveFirstLocations)
+
+        let didCreateSecondRepository = await store.createOwnedRepository()
+        XCTAssertTrue(didCreateSecondRepository)
+        let secondRepository = try XCTUnwrap(store.currentRepository)
+        let didSaveSecondLocations = await store.saveLocations([
+            LibraryLocation(id: "living-room", name: "客厅", sortOrder: 0),
+            LibraryLocation(id: "bedroom", name: "卧室", sortOrder: 1, isVisible: false)
+        ])
+        XCTAssertTrue(didSaveSecondLocations)
+
+        await store.switchRepository(to: firstRepository)
+        XCTAssertEqual(store.currentRepository?.id, firstRepository.id)
+        XCTAssertEqual(store.locations.map(\.name), ["书房"])
+
+        await store.switchRepository(to: secondRepository)
+        XCTAssertEqual(store.currentRepository?.id, secondRepository.id)
+        XCTAssertEqual(store.locations.map(\.name), ["客厅", "卧室"])
+        XCTAssertEqual(store.locations.map(\.isVisible), [true, false])
+    }
+
+    @MainActor
     func testStoreCanExportCurrentRepositoryAsZip() async throws {
         let namespace = "store-export-\(UUID().uuidString)"
         let sessionStore = RepositorySessionStore(namespace: namespace)
