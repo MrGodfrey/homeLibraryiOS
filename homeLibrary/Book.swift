@@ -436,12 +436,129 @@ nonisolated struct BookDraft: Equatable, Sendable {
     }
 }
 
+nonisolated enum LibraryBookSortOrder: String, CaseIterable, Identifiable, Codable, Sendable {
+    case author
+    case title
+    case createdAt
+    case updatedAt
+
+    nonisolated static let defaultValue: LibraryBookSortOrder = .createdAt
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .author:
+            return "按作者首字母排序"
+        case .title:
+            return "按标题首字母排序"
+        case .createdAt:
+            return "按添加时间排序"
+        case .updatedAt:
+            return "按修改时间排序"
+        }
+    }
+
+    func areInIncreasingOrder(_ lhs: Book, _ rhs: Book) -> Bool {
+        switch self {
+        case .author:
+            let authorComparison = LibraryStringCollation.compare(lhs.author, rhs.author)
+            if authorComparison != .orderedSame {
+                return authorComparison == .orderedAscending
+            }
+
+            let titleComparison = LibraryStringCollation.compare(lhs.title, rhs.title)
+            if titleComparison != .orderedSame {
+                return titleComparison == .orderedAscending
+            }
+
+            return LibraryBookSortOrder.updatedAt.areInIncreasingOrder(lhs, rhs)
+        case .title:
+            let titleComparison = LibraryStringCollation.compare(lhs.title, rhs.title)
+            if titleComparison != .orderedSame {
+                return titleComparison == .orderedAscending
+            }
+
+            let authorComparison = LibraryStringCollation.compare(lhs.author, rhs.author)
+            if authorComparison != .orderedSame {
+                return authorComparison == .orderedAscending
+            }
+
+            return LibraryBookSortOrder.updatedAt.areInIncreasingOrder(lhs, rhs)
+        case .createdAt:
+            if lhs.createdAt != rhs.createdAt {
+                return lhs.createdAt > rhs.createdAt
+            }
+
+            if lhs.updatedAt != rhs.updatedAt {
+                return lhs.updatedAt > rhs.updatedAt
+            }
+
+            let titleComparison = LibraryStringCollation.compare(lhs.title, rhs.title)
+            if titleComparison != .orderedSame {
+                return titleComparison == .orderedAscending
+            }
+
+            return lhs.id < rhs.id
+        case .updatedAt:
+            if lhs.updatedAt != rhs.updatedAt {
+                return lhs.updatedAt > rhs.updatedAt
+            }
+
+            if lhs.createdAt != rhs.createdAt {
+                return lhs.createdAt > rhs.createdAt
+            }
+
+            let titleComparison = LibraryStringCollation.compare(lhs.title, rhs.title)
+            if titleComparison != .orderedSame {
+                return titleComparison == .orderedAscending
+            }
+
+            return lhs.id < rhs.id
+        }
+    }
+}
+
+nonisolated enum LibraryStringCollation {
+    nonisolated private static let locale = Locale(identifier: "zh_Hans_CN")
+
+    static func compare(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        let leftKey = normalizedKey(for: lhs)
+        let rightKey = normalizedKey(for: rhs)
+
+        switch (leftKey.isEmpty, rightKey.isEmpty) {
+        case (true, true):
+            return .orderedSame
+        case (true, false):
+            return .orderedDescending
+        case (false, true):
+            return .orderedAscending
+        case (false, false):
+            return leftKey.compare(rightKey, options: [.numeric], locale: locale)
+        }
+    }
+
+    private static func normalizedKey(for value: String) -> String {
+        let trimmedValue = value.trimmed
+        guard !trimmedValue.isEmpty else {
+            return ""
+        }
+
+        let latinValue = trimmedValue.applyingTransform(.toLatin, reverse: false) ?? trimmedValue
+        return latinValue
+            .folding(options: [.diacriticInsensitive, .caseInsensitive, .widthInsensitive], locale: locale)
+            .replacingOccurrences(of: "'", with: "")
+            .replacingOccurrences(of: " ", with: "")
+    }
+}
+
 nonisolated enum LibraryFilter {
     static func filteredBooks(
         from books: [Book],
         query: String,
         selectedLocationID: String?,
-        locationsByID: [String: LibraryLocation]
+        locationsByID: [String: LibraryLocation],
+        sortOrder: LibraryBookSortOrder
     ) -> [Book] {
         let keyword = query.trimmed.lowercased()
 
@@ -461,11 +578,7 @@ nonisolated enum LibraryFilter {
                 return book.searchCorpus(locationName: locationName).contains(keyword)
             }
             .sorted { left, right in
-                if left.updatedAt != right.updatedAt {
-                    return left.updatedAt > right.updatedAt
-                }
-
-                return left.createdAt > right.createdAt
+                sortOrder.areInIncreasingOrder(left, right)
             }
     }
 }

@@ -19,6 +19,7 @@ struct RepositoryManagementView: View {
     @State private var activitySheetItem: ActivitySheetItem?
     @State private var sharingControllerItem: SharingControllerItem?
     @State private var incomingShareLink = ""
+    @State private var pendingLocationSaveTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -27,6 +28,7 @@ struct RepositoryManagementView: View {
                 repositoriesSection
 
                 if store.hasRepository {
+                    sortingSection
                     locationsSection
 
                     if store.canManageSharing || store.canAcceptShareLinks {
@@ -79,11 +81,20 @@ struct RepositoryManagementView: View {
             .onChange(of: store.locations) {
                 syncDraftLocations()
             }
+            .onDisappear {
+                scheduleLocationSave(immediately: true)
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("关闭") {
-                        dismiss()
+                        Task {
+                            guard await persistLocationChangesIfNeeded() else {
+                                return
+                            }
+                            dismiss()
+                        }
                     }
+                    .accessibilityIdentifier("repositorySettingsCloseButton")
                 }
             }
         }
@@ -100,11 +111,6 @@ struct RepositoryManagementView: View {
                     LabeledContent("角色", value: store.repositoryRoleTitle)
                     LabeledContent("数据库", value: store.repositoryScopeTitle)
                     LabeledContent("共享状态", value: store.shareStatusTitle)
-
-                    Text(currentRepository.zoneIDDescription)
-                        .font(.footnote.monospaced())
-                        .foregroundStyle(LibraryTheme.secondaryText)
-                        .textSelection(.enabled)
                 }
                 .padding(.vertical, 4)
             } else {
@@ -114,6 +120,29 @@ struct RepositoryManagementView: View {
         }
         header: {
             sectionHeader("当前仓库")
+        }
+        .listRowBackground(LibraryTheme.surface)
+    }
+
+    private var sortingSection: some View {
+        Section {
+            Picker(
+                "图书排序方式",
+                selection: Binding(
+                    get: { store.bookSortOrder },
+                    set: { store.setBookSortOrder($0) }
+                )
+            ) {
+                ForEach(LibraryBookSortOrder.allCases) { sortOrder in
+                    Text(sortOrder.title)
+                        .tag(sortOrder)
+                }
+            }
+            .pickerStyle(.menu)
+            .accessibilityIdentifier("bookSortPicker")
+        }
+        header: {
+            sectionHeader("图书排序")
         }
         .listRowBackground(LibraryTheme.surface)
     }
@@ -132,6 +161,9 @@ struct RepositoryManagementView: View {
             if !store.hasOwnedRepository {
                 Button {
                     Task {
+                        guard await persistLocationChangesIfNeeded() else {
+                            return
+                        }
                         _ = await store.createOwnedRepository()
                     }
                 } label: {
@@ -159,6 +191,9 @@ struct RepositoryManagementView: View {
 
             Button {
                 Task {
+                    guard await persistLocationChangesIfNeeded() else {
+                        return
+                    }
                     let didCreate = await store.createOwnedRepository()
                     if didCreate {
                         dismiss()
@@ -183,60 +218,34 @@ struct RepositoryManagementView: View {
     private var locationsSection: some View {
         Section {
             ForEach(draftLocations) { location in
-                let locationBinding = draftLocationBinding(for: location)
-                VStack(alignment: .leading, spacing: 8) {
-                    TextField("地点名称", text: locationBinding.name)
-
-                    HStack {
-                        Toggle("显示在首页筛选中", isOn: locationBinding.isVisible)
-
-                        Spacer()
-
-                        locationMoveButton(systemName: "arrow.up", enabled: canMove(location, direction: -1)) {
-                            move(location.id, by: -1)
-                        }
-
-                        locationMoveButton(systemName: "arrow.down", enabled: canMove(location, direction: 1)) {
-                            move(location.id, by: 1)
-                        }
-
+                locationRow(for: location)
+                    .moveDisabled(draftLocations.count < 2)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         if draftLocations.count > 1 {
                             Button(role: .destructive) {
-                                draftLocations.removeAll { $0.id == location.id }
+                                removeLocation(location.id)
                             } label: {
-                                Image(systemName: "trash")
+                                Label("删除", systemImage: "trash")
                             }
                         }
                     }
-                    .font(.footnote)
-                }
-                .padding(.vertical, 4)
             }
+            .onMove(perform: moveLocations)
 
             Button {
-                draftLocations.append(
-                    LibraryLocation(
-                        name: "新地点 \(draftLocations.count + 1)",
-                        sortOrder: draftLocations.count
-                    )
-                )
+                addLocation()
             } label: {
                 formActionLabel(title: "新增地点", systemName: "plus", tint: LibraryTheme.accent)
             }
-
-            Button {
-                Task {
-                    _ = await store.saveLocations(normalizedDraftLocations())
-                }
-            } label: {
-                formActionLabel(title: "保存地点配置", systemName: "checkmark", tint: LibraryTheme.accent)
-            }
-            .disabled(draftLocations.isEmpty)
+            .accessibilityIdentifier("addLocationButton")
         }
         header: {
             sectionHeader("地点配置")
+        } footer: {
+            Text("拖动右侧把手调整顺序，修改后会自动保存。")
         }
         .listRowBackground(LibraryTheme.surface)
+        .environment(\.editMode, .constant(.active))
     }
 
     private var sharingSection: some View {
@@ -398,15 +407,20 @@ struct RepositoryManagementView: View {
                 } else {
                     Button("切换") {
                         Task {
+                            guard await persistLocationChangesIfNeeded() else {
+                                return
+                            }
                             await store.switchRepository(to: repository)
                         }
                     }
                 }
             }
 
-            Text(repository.subtitle)
-                .font(.footnote)
-                .foregroundStyle(LibraryTheme.secondaryText)
+            if !store.isCurrentRepository(repository) {
+                Text(repository.subtitle)
+                    .font(.footnote)
+                    .foregroundStyle(LibraryTheme.secondaryText)
+            }
         }
         .padding(.vertical, 4)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -455,6 +469,20 @@ struct RepositoryManagementView: View {
         draftLocations = store.locations.isEmpty ? LibraryLocation.defaultLocations() : store.locations
     }
 
+    private func locationRow(for location: LibraryLocation) -> some View {
+        let locationBinding = draftLocationBinding(for: location)
+        return VStack(alignment: .leading, spacing: 10) {
+            TextField("地点名称", text: locationBinding.name)
+                .accessibilityIdentifier("locationNameField-\(location.id)")
+
+            Toggle("显示在首页筛选中", isOn: locationBinding.isVisible)
+                .font(.footnote)
+                .accessibilityIdentifier("locationVisibilityToggle-\(location.id)")
+        }
+        .padding(.vertical, 4)
+        .accessibilityIdentifier("locationRow-\(location.id)")
+    }
+
     private func draftLocationBinding(for location: LibraryLocation) -> Binding<LibraryLocation> {
         // Repository switches replace the whole locations array. Keep this binding ID-based so
         // SwiftUI does not hold on to a stale array index while the Toggle is reconciling.
@@ -468,6 +496,7 @@ struct RepositoryManagementView: View {
                 }
 
                 draftLocations[index] = updatedLocation
+                scheduleLocationSave()
             }
         )
     }
@@ -485,37 +514,75 @@ struct RepositoryManagementView: View {
             }
     }
 
-    private func canMove(_ location: LibraryLocation, direction: Int) -> Bool {
-        guard let index = draftLocations.firstIndex(where: { $0.id == location.id }) else {
-            return false
-        }
-
-        let targetIndex = index + direction
-        return draftLocations.indices.contains(targetIndex)
-    }
-
-    private func move(_ locationID: String, by offset: Int) {
-        guard let index = draftLocations.firstIndex(where: { $0.id == locationID }) else {
-            return
-        }
-
-        let targetIndex = index + offset
-        guard draftLocations.indices.contains(targetIndex) else {
-            return
-        }
-
-        let item = draftLocations.remove(at: index)
-        draftLocations.insert(item, at: targetIndex)
+    private func addLocation() {
+        draftLocations.append(
+            LibraryLocation(
+                name: "新地点 \(draftLocations.count + 1)",
+                sortOrder: draftLocations.count
+            )
+        )
         draftLocations = normalizedDraftLocations()
+        scheduleLocationSave(immediately: true)
     }
 
-    private func locationMoveButton(systemName: String, enabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .foregroundStyle(enabled ? LibraryTheme.icon : LibraryTheme.tertiaryText)
+    private func removeLocation(_ locationID: String) {
+        guard draftLocations.count > 1 else {
+            return
         }
-        .disabled(!enabled)
-        .buttonStyle(.plain)
+
+        draftLocations.removeAll { $0.id == locationID }
+        draftLocations = normalizedDraftLocations()
+        scheduleLocationSave(immediately: true)
+    }
+
+    private func moveLocations(from source: IndexSet, to destination: Int) {
+        draftLocations.move(fromOffsets: source, toOffset: destination)
+        draftLocations = normalizedDraftLocations()
+        scheduleLocationSave(immediately: true)
+    }
+
+    private func scheduleLocationSave(immediately: Bool = false) {
+        pendingLocationSaveTask?.cancel()
+        guard store.currentRepository != nil else {
+            return
+        }
+
+        let pendingLocations = normalizedDraftLocations()
+        guard pendingLocations != store.locations else {
+            return
+        }
+
+        pendingLocationSaveTask = Task { @MainActor in
+            if !immediately {
+                try? await Task.sleep(for: .milliseconds(350))
+            }
+
+            guard !Task.isCancelled else {
+                return
+            }
+
+            let latestLocations = normalizedDraftLocations()
+            guard latestLocations != store.locations else {
+                return
+            }
+
+            _ = await store.saveLocations(latestLocations)
+        }
+    }
+
+    @MainActor
+    private func persistLocationChangesIfNeeded() async -> Bool {
+        pendingLocationSaveTask?.cancel()
+        guard store.currentRepository != nil else {
+            return true
+        }
+
+        let latestLocations = normalizedDraftLocations()
+        guard latestLocations != store.locations else {
+            return true
+        }
+
+        return await store.saveLocations(latestLocations)
     }
 
     private func sectionHeader(_ title: String) -> some View {

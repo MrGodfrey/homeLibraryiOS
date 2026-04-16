@@ -46,11 +46,110 @@ final class homeLibraryTests: XCTestCase {
             from: books,
             query: "借出",
             selectedLocationID: "cq",
-            locationsByID: locationsByID
+            locationsByID: locationsByID,
+            sortOrder: .updatedAt
         )
 
         XCTAssertEqual(filtered.count, 1)
         XCTAssertEqual(filtered.first?.id, "2")
+    }
+
+    func testSortsBooksByCreatedTimeDescendingByDefault() {
+        let books = [
+            Book(
+                id: "old",
+                title: "旧书",
+                author: "作者 A",
+                locationID: "cd",
+                createdAt: Date(timeIntervalSince1970: 10),
+                updatedAt: Date(timeIntervalSince1970: 100)
+            ),
+            Book(
+                id: "new",
+                title: "新书",
+                author: "作者 B",
+                locationID: "cd",
+                createdAt: Date(timeIntervalSince1970: 20),
+                updatedAt: Date(timeIntervalSince1970: 50)
+            )
+        ]
+
+        let filtered = LibraryFilter.filteredBooks(
+            from: books,
+            query: "",
+            selectedLocationID: nil,
+            locationsByID: [:],
+            sortOrder: .defaultValue
+        )
+
+        XCTAssertEqual(filtered.map(\.id), ["new", "old"])
+    }
+
+    func testSortsBooksByUpdatedTimeDescending() {
+        let books = [
+            Book(
+                id: "stale",
+                title: "旧版本",
+                author: "作者 A",
+                locationID: "cd",
+                createdAt: Date(timeIntervalSince1970: 20),
+                updatedAt: Date(timeIntervalSince1970: 100)
+            ),
+            Book(
+                id: "fresh",
+                title: "新版本",
+                author: "作者 B",
+                locationID: "cd",
+                createdAt: Date(timeIntervalSince1970: 10),
+                updatedAt: Date(timeIntervalSince1970: 200)
+            )
+        ]
+
+        let filtered = LibraryFilter.filteredBooks(
+            from: books,
+            query: "",
+            selectedLocationID: nil,
+            locationsByID: [:],
+            sortOrder: .updatedAt
+        )
+
+        XCTAssertEqual(filtered.map(\.id), ["fresh", "stale"])
+    }
+
+    func testSortsBooksByAuthorUsingChineseAndEnglishCollation() {
+        let books = [
+            Book(id: "zhang", title: "第一本", author: "张爱玲", locationID: "cd"),
+            Book(id: "alice", title: "第二本", author: "Alice Munro", locationID: "cd"),
+            Book(id: "liu", title: "第三本", author: "刘慈欣", locationID: "cd")
+        ]
+
+        let filtered = LibraryFilter.filteredBooks(
+            from: books,
+            query: "",
+            selectedLocationID: nil,
+            locationsByID: [:],
+            sortOrder: .author
+        )
+
+        XCTAssertEqual(filtered.map(\.id), ["alice", "liu", "zhang"])
+    }
+
+    func testSortsBooksByTitleUsingChineseAndEnglishCollation() {
+        let books = [
+            Book(id: "san-ti", title: "三体", author: "刘慈欣", locationID: "cd"),
+            Book(id: "algorithms", title: "Algorithms", author: "Sedgewick", locationID: "cd"),
+            Book(id: "bai-ye-xing", title: "白夜行", author: "东野圭吾", locationID: "cd")
+        ]
+
+        let filtered = LibraryFilter.filteredBooks(
+            from: books,
+            query: "",
+            selectedLocationID: nil,
+            locationsByID: [:],
+            sortOrder: .title
+        )
+
+        XCTAssertEqual(filtered.map(\.id), ["algorithms", "bai-ye-xing", "san-ti"])
     }
 
     func testNormalizesDraftFieldsAndCustomFieldsBeforeSave() {
@@ -384,6 +483,105 @@ final class homeLibraryTests: XCTestCase {
     }
 
     @MainActor
+    func testStorePersistsBookSortOrderPerRepository() async throws {
+        let namespace = "store-sort-\(UUID().uuidString)"
+        let sessionStore = RepositorySessionStore(namespace: namespace)
+        let tempRoot = try makeTemporaryDirectory()
+        let remoteService = InMemoryLibraryRemoteService()
+        let configuration = LibraryAppConfiguration(
+            cacheStore: LibraryCacheStore(rootURL: tempRoot.appendingPathComponent("cloudkit-cache", isDirectory: true)),
+            legacyImporter: LegacyLibraryImporter(storageRootURL: tempRoot),
+            sessionStore: sessionStore,
+            remoteService: remoteService,
+            preferredOwnedRepositoryName: "我的家庭书库"
+        )
+
+        let store = LibraryStore(configuration: configuration)
+
+        let didCreateFirstRepository = await store.createOwnedRepository()
+        XCTAssertTrue(didCreateFirstRepository)
+        let firstRepository = try XCTUnwrap(store.currentRepository)
+        store.setBookSortOrder(.author)
+
+        let didCreateSecondRepository = await store.createOwnedRepository()
+        XCTAssertTrue(didCreateSecondRepository)
+        let secondRepository = try XCTUnwrap(store.currentRepository)
+        store.setBookSortOrder(.title)
+
+        await store.switchRepository(to: firstRepository)
+        XCTAssertEqual(store.bookSortOrder, .author)
+
+        let restoredStore = LibraryStore(configuration: configuration)
+        XCTAssertEqual(restoredStore.currentRepository?.id, firstRepository.id)
+        XCTAssertEqual(restoredStore.bookSortOrder, .author)
+
+        await restoredStore.loadBooks(force: true)
+        await restoredStore.switchRepository(to: secondRepository)
+        XCTAssertEqual(restoredStore.bookSortOrder, .title)
+    }
+
+    @MainActor
+    func testStoreLocationVisibilityUpdatesFiltersAndDefaultLocationImmediately() async throws {
+        let namespace = "store-location-visibility-\(UUID().uuidString)"
+        let sessionStore = RepositorySessionStore(namespace: namespace)
+        let tempRoot = try makeTemporaryDirectory()
+        let configuration = LibraryAppConfiguration(
+            cacheStore: LibraryCacheStore(rootURL: tempRoot.appendingPathComponent("cloudkit-cache", isDirectory: true)),
+            legacyImporter: LegacyLibraryImporter(storageRootURL: tempRoot),
+            sessionStore: sessionStore,
+            remoteService: InMemoryLibraryRemoteService(),
+            preferredOwnedRepositoryName: "我的家庭书库"
+        )
+
+        let store = LibraryStore(configuration: configuration)
+        let didCreateRepository = await store.createOwnedRepository()
+        XCTAssertTrue(didCreateRepository)
+        store.selectedLocationID = store.defaultLocationID
+
+        let didSaveLocations = await store.saveLocations([
+            LibraryLocation(id: "study", name: "书房", sortOrder: 0, isVisible: false),
+            LibraryLocation(id: "living-room", name: "客厅", sortOrder: 1)
+        ])
+        XCTAssertTrue(didSaveLocations)
+
+        XCTAssertEqual(store.visibleLocationFilters.map(\.title), ["全部", "客厅"])
+        XCTAssertNil(store.selectedLocationID)
+        XCTAssertEqual(store.defaultLocationID, "living-room")
+    }
+
+    @MainActor
+    func testStoreSaveLocationsAppliesReorderedLocations() async throws {
+        let namespace = "store-location-order-\(UUID().uuidString)"
+        let sessionStore = RepositorySessionStore(namespace: namespace)
+        let tempRoot = try makeTemporaryDirectory()
+        let configuration = LibraryAppConfiguration(
+            cacheStore: LibraryCacheStore(rootURL: tempRoot.appendingPathComponent("cloudkit-cache", isDirectory: true)),
+            legacyImporter: LegacyLibraryImporter(storageRootURL: tempRoot),
+            sessionStore: sessionStore,
+            remoteService: InMemoryLibraryRemoteService(),
+            preferredOwnedRepositoryName: "我的家庭书库"
+        )
+
+        let store = LibraryStore(configuration: configuration)
+        let didCreateRepository = await store.createOwnedRepository()
+        XCTAssertTrue(didCreateRepository)
+        let didSaveInitialLocations = await store.saveLocations([
+            LibraryLocation(id: "study", name: "书房", sortOrder: 0),
+            LibraryLocation(id: "bedroom", name: "卧室", sortOrder: 1)
+        ])
+        XCTAssertTrue(didSaveInitialLocations)
+
+        let didSaveReorderedLocations = await store.saveLocations([
+            LibraryLocation(id: "bedroom", name: "卧室", sortOrder: 0),
+            LibraryLocation(id: "study", name: "书房", sortOrder: 1)
+        ])
+        XCTAssertTrue(didSaveReorderedLocations)
+
+        XCTAssertEqual(store.locations.map(\.id), ["bedroom", "study"])
+        XCTAssertEqual(store.locations.map(\.sortOrder), [0, 1])
+    }
+
+    @MainActor
     func testStoreCanExportCurrentRepositoryAsZip() async throws {
         let namespace = "store-export-\(UUID().uuidString)"
         let sessionStore = RepositorySessionStore(namespace: namespace)
@@ -512,6 +710,45 @@ final class homeLibraryTests: XCTestCase {
         XCTAssertEqual(store.locations.map(\.name), ["成都"])
         XCTAssertEqual(store.locations.map(\.id), ["location.chengdu"])
         XCTAssertEqual(store.books.first?.locationID, "location.chengdu")
+    }
+
+    @MainActor
+    func testStoreClearCurrentRepositoryResetsBooksAndLocations() async throws {
+        let namespace = "store-clear-\(UUID().uuidString)"
+        let sessionStore = RepositorySessionStore(namespace: namespace)
+        let tempRoot = try makeTemporaryDirectory()
+        let configuration = LibraryAppConfiguration(
+            cacheStore: LibraryCacheStore(rootURL: tempRoot.appendingPathComponent("cloudkit-cache", isDirectory: true)),
+            legacyImporter: LegacyLibraryImporter(storageRootURL: tempRoot),
+            sessionStore: sessionStore,
+            remoteService: InMemoryLibraryRemoteService(),
+            preferredOwnedRepositoryName: "我的家庭书库"
+        )
+
+        let store = LibraryStore(configuration: configuration)
+        let didCreateRepository = await store.createOwnedRepository()
+        XCTAssertTrue(didCreateRepository)
+        let didSaveLocations = await store.saveLocations([
+            LibraryLocation(id: "study", name: "书房", sortOrder: 0)
+        ])
+        XCTAssertTrue(didSaveLocations)
+        let didSaveBook = await store.saveBook(
+            draft: BookDraft(
+                title: "可清空的书",
+                author: "测试作者",
+                publisher: "测试出版社",
+                year: "2026",
+                locationID: "study",
+                coverData: nil
+            ),
+            editing: nil
+        )
+        XCTAssertTrue(didSaveBook)
+
+        let didClearRepository = await store.clearCurrentRepository()
+        XCTAssertTrue(didClearRepository)
+        XCTAssertTrue(store.books.isEmpty)
+        XCTAssertEqual(store.locations.map(\.name), ["成都", "重庆"])
     }
 
     private func makeTemporaryDirectory() throws -> URL {

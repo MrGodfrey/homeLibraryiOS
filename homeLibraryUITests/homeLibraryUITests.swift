@@ -34,6 +34,18 @@ final class homeLibraryUITests: XCTestCase {
         XCTAssertTrue(firstBookCard.waitForExistence(timeout: 5))
     }
 
+    @MainActor
+    func testRepositorySettingsShowsBookSortAndManagementOptions() throws {
+        createOwnedRepositoryIfNeeded()
+        openRepositorySettings()
+
+        XCTAssertTrue(app.buttons["bookSortPicker"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["addLocationButton"].waitForExistence(timeout: 5))
+        app.swipeUp()
+        XCTAssertTrue(app.buttons["exportRepositoryButton"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["clearRepositoryButton"].waitForExistence(timeout: 5))
+    }
+
     private func addBook(title: String, author: String, publisher: String, year: String) {
         app.buttons["addBookButton"].tap()
 
@@ -55,6 +67,13 @@ final class homeLibraryUITests: XCTestCase {
         }
 
         XCTAssertTrue(app.buttons["addBookButton"].waitForExistence(timeout: 5))
+    }
+
+    private func openRepositorySettings() {
+        let settingsButton = app.buttons["repositoryManagementButton"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 5))
+        settingsButton.tap()
+        XCTAssertTrue(app.buttons["repositorySettingsCloseButton"].waitForExistence(timeout: 5))
     }
 
     private func replaceText(in element: XCUIElement, with value: String) {

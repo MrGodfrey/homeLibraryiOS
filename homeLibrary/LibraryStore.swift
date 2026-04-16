@@ -50,6 +50,7 @@ final class LibraryStore: ObservableObject {
     @Published private(set) var availableRepositories: [LibraryRepositoryReference] = []
     @Published var searchText = ""
     @Published var selectedLocationID: String?
+    @Published private(set) var bookSortOrder: LibraryBookSortOrder
     @Published private(set) var isLoading = false
     @Published private(set) var isSaving = false
     @Published private(set) var isCreatingRepository = false
@@ -78,6 +79,7 @@ final class LibraryStore: ObservableObject {
         remoteService = configuration.remoteService
         sessionState = configuration.sessionStore.load()
         currentRepository = sessionState.currentRepository
+        bookSortOrder = sessionState.bookSortOrder(for: sessionState.currentRepository)
         syncStatus = .idle
     }
 
@@ -86,7 +88,8 @@ final class LibraryStore: ObservableObject {
             from: books,
             query: searchText,
             selectedLocationID: selectedLocationID,
-            locationsByID: locationsByID
+            locationsByID: locationsByID,
+            sortOrder: bookSortOrder
         )
     }
 
@@ -233,6 +236,21 @@ final class LibraryStore: ObservableObject {
         sessionState.currentRepository = repository
         persistSessionState()
         await loadBooks(force: true)
+    }
+
+    func setBookSortOrder(_ sortOrder: LibraryBookSortOrder) {
+        guard bookSortOrder != sortOrder else {
+            return
+        }
+
+        bookSortOrder = sortOrder
+
+        guard let currentRepository else {
+            return
+        }
+
+        sessionState.setBookSortOrder(sortOrder, for: currentRepository)
+        sessionStore.save(sessionState)
     }
 
     @discardableResult
@@ -505,6 +523,7 @@ final class LibraryStore: ObservableObject {
             let previousCurrentRepository = currentRepository
             try await remoteService.deleteRepository(repository)
             try await clearCachedRepository(repositoryID: repository.id)
+            sessionState.removeBookSortOrder(for: repository)
             try await refreshAvailableRepositories(selecting: previousCurrentRepository)
             persistSessionState()
 
@@ -852,6 +871,7 @@ final class LibraryStore: ObservableObject {
 
     private func currentRepositoryChanged(_ repository: LibraryRepositoryReference?) {
         currentRepository = repository
+        bookSortOrder = sessionState.bookSortOrder(for: repository)
     }
 
     private func sameRepository(_ lhs: LibraryRepositoryReference?, _ rhs: LibraryRepositoryReference?) -> Bool {

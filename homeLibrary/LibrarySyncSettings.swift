@@ -79,6 +79,10 @@ nonisolated struct LibraryRepositoryReference: Identifiable, Equatable, Codable,
     var isOwner: Bool {
         role == .owner
     }
+
+    var persistenceID: String {
+        "\(databaseScope.rawValue):\(id)"
+    }
 }
 
 nonisolated struct RemoteRepositorySnapshot: Sendable {
@@ -89,9 +93,54 @@ nonisolated struct RemoteRepositorySnapshot: Sendable {
 
 nonisolated struct LibrarySessionState: Equatable, Codable, Sendable {
     var currentRepository: LibraryRepositoryReference?
+    var bookSortOrderByRepositoryID: [String: LibraryBookSortOrder]
+
+    private enum CodingKeys: String, CodingKey {
+        case currentRepository
+        case bookSortOrderByRepositoryID
+    }
+
+    init(
+        currentRepository: LibraryRepositoryReference?,
+        bookSortOrderByRepositoryID: [String: LibraryBookSortOrder] = [:]
+    ) {
+        self.currentRepository = currentRepository
+        self.bookSortOrderByRepositoryID = bookSortOrderByRepositoryID
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        currentRepository = try container.decodeIfPresent(LibraryRepositoryReference.self, forKey: .currentRepository)
+        bookSortOrderByRepositoryID = try container.decodeIfPresent(
+            [String: LibraryBookSortOrder].self,
+            forKey: .bookSortOrderByRepositoryID
+        ) ?? [:]
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(currentRepository, forKey: .currentRepository)
+        try container.encode(bookSortOrderByRepositoryID, forKey: .bookSortOrderByRepositoryID)
+    }
 
     nonisolated static func makeNew() -> LibrarySessionState {
         LibrarySessionState(currentRepository: nil)
+    }
+
+    func bookSortOrder(for repository: LibraryRepositoryReference?) -> LibraryBookSortOrder {
+        guard let repository else {
+            return .defaultValue
+        }
+
+        return bookSortOrderByRepositoryID[repository.persistenceID] ?? .defaultValue
+    }
+
+    mutating func setBookSortOrder(_ sortOrder: LibraryBookSortOrder, for repository: LibraryRepositoryReference) {
+        bookSortOrderByRepositoryID[repository.persistenceID] = sortOrder
+    }
+
+    mutating func removeBookSortOrder(for repository: LibraryRepositoryReference) {
+        bookSortOrderByRepositoryID[repository.persistenceID] = nil
     }
 }
 
