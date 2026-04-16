@@ -91,10 +91,27 @@ struct BookEditorView: View {
 
                 await loadCover(from: selectedPhotoItem)
             }
+            .task(id: locations.map(\.id)) {
+                syncLocationSelectionIfNeeded()
+            }
             .alert(item: $activeAlert) { alert in
                 makeAlert(for: alert)
             }
         }
+    }
+
+    private var locationSelection: Binding<String> {
+        Binding(
+            get: {
+                draft.resolvedLocationID(
+                    in: locations,
+                    fallback: defaultLocationID
+                )
+            },
+            set: { newValue in
+                draft.locationID = newValue.trimmed
+            }
+        )
     }
 
     private var informationSection: some View {
@@ -109,7 +126,7 @@ struct BookEditorView: View {
                 .keyboardType(.numbersAndPunctuation)
                 .accessibilityIdentifier("yearField")
 
-            Picker("所在地点", selection: $draft.locationID) {
+            Picker("所在地点", selection: locationSelection) {
                 ForEach(locations) { location in
                     Text(location.name).tag(location.id)
                 }
@@ -220,6 +237,20 @@ struct BookEditorView: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(textColor)
         }
+    }
+
+    @MainActor
+    private func syncLocationSelectionIfNeeded() {
+        let resolvedLocationID = draft.resolvedLocationID(
+            in: locations,
+            fallback: defaultLocationID
+        )
+
+        guard draft.locationID != resolvedLocationID else {
+            return
+        }
+
+        draft.locationID = resolvedLocationID
     }
 
     @MainActor

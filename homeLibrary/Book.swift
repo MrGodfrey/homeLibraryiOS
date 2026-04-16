@@ -434,6 +434,26 @@ nonisolated struct BookDraft: Equatable, Sendable {
     var canSave: Bool {
         !title.trimmed.isEmpty && !locationID.trimmed.isEmpty
     }
+
+    func resolvedLocationID(
+        in locations: [LibraryLocation],
+        fallback fallbackLocationID: String
+    ) -> String {
+        let normalizedLocationID = locationID.trimmed
+        let normalizedFallbackLocationID = fallbackLocationID.trimmed.nilIfEmpty
+
+        if !normalizedLocationID.isEmpty,
+           locations.contains(where: { $0.id == normalizedLocationID }) {
+            return normalizedLocationID
+        }
+
+        if let normalizedFallbackLocationID,
+           locations.contains(where: { $0.id == normalizedFallbackLocationID }) {
+            return normalizedFallbackLocationID
+        }
+
+        return locations.first?.id ?? normalizedFallbackLocationID ?? LibraryLocation.defaultLocations()[0].id
+    }
 }
 
 nonisolated enum LibraryBookSortOrder: String, CaseIterable, Identifiable, Codable, Sendable {

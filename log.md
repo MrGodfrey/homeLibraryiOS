@@ -282,3 +282,30 @@
 - `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryTests test` 通过
 - `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryTests -only-testing:homeLibraryUITests test` 通过
 - 共执行 `51` 个测试，其中 `1` 个 CloudKit live 测试按预期跳过，其余全部通过
+
+## 2026-04-16（修复编辑页地点 Picker 无效 selection）
+
+- 修复书籍编辑页地点 `Picker`：当当前草稿的 `locationID` 已经不在当前仓库地点列表里时，不再把无效 selection 直接交给 SwiftUI，避免控制台持续报 `does not have an associated tag`。
+- 新增失效地点兼容：编辑已有图书且原地点已被删除时，地点选择器会保留一个“原地点已删除”的占位选项，避免用户只是改书名或作者时就被静默改写地点。
+- 收紧新建图书默认地点：如果新建时带入的默认地点已经失效，编辑页会自动回退到当前仓库仍可选的地点，避免保存出无效 `locationID`。
+- 补充 `BookDraft` 单测：覆盖“新建时回退到可用地点”和“编辑已有图书时保留失效地点占位”两条分支。
+- 同步更新 `README.md` 的录入说明，补充失效地点在编辑页中的当前处理方式。
+
+### 验证记录
+
+- `Build iOS Apps / build_sim` 通过
+- `Build iOS Apps / test_sim -only-testing:homeLibraryTests` 通过，共 `46` 个测试，其中 `45` 个通过、`1` 个 CloudKit live 测试按预期跳过
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryUITests test` 通过，`6` 个 UI 测试全部通过
+
+## 2026-04-16（地点失效时改为静默回退）
+
+- 调整编辑页地点失效策略：不再显示“原地点已删除”占位项；只要当前 `locationID` 不在仓库地点配置里，就直接静默回退到地点配置中的第一个可用地点。
+- 统一新建与编辑行为：新建图书默认地点失效、或编辑旧图书遇到已删除地点时，都会落到当前第一个可选地点，避免界面暴露失效地点状态。
+- 更新 `BookDraft` 单测，改为验证新建和编辑两条路径都会回退到第一个可用地点。
+- 同步更新 `README.md` 的录入说明，确保文档与当前真实行为一致。
+
+### 验证记录
+
+- `Build iOS Apps / build_sim` 通过
+- `Build iOS Apps / test_sim -only-testing:homeLibraryTests` 通过，共 `46` 个测试，其中 `45` 个通过、`1` 个 CloudKit live 测试按预期跳过
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryUITests test` 通过，`7` 个 UI 测试全部通过

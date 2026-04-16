@@ -192,6 +192,49 @@ final class homeLibraryTests: XCTestCase {
         XCTAssertTrue(normalized.keepsExistingCoverReference)
     }
 
+    func testDraftFallsBackToAvailableLocationWhenSelectionIsMissingForNewBook() {
+        let locations = [
+            LibraryLocation(id: "study", name: "书房", sortOrder: 0),
+            LibraryLocation(id: "living-room", name: "客厅", sortOrder: 1)
+        ]
+        let draft = BookDraft(
+            title: "家庭书库",
+            author: "",
+            publisher: "",
+            year: "",
+            locationID: "location.chengdu",
+            coverData: nil
+        )
+
+        XCTAssertEqual(
+            draft.resolvedLocationID(in: locations, fallback: "location.chengdu"),
+            "study"
+        )
+    }
+
+    func testDraftFallsBackToFirstAvailableLocationWhenEditingBookUsesMissingLocation() {
+        let locations = [
+            LibraryLocation(id: "study", name: "书房", sortOrder: 0),
+            LibraryLocation(id: "living-room", name: "客厅", sortOrder: 1)
+        ]
+        let draft = BookDraft(
+            title: "家庭书库",
+            author: "",
+            publisher: "",
+            year: "",
+            locationID: "location.chengdu",
+            coverData: nil
+        )
+
+        XCTAssertEqual(
+            draft.resolvedLocationID(
+                in: locations,
+                fallback: "location.chengdu"
+            ),
+            "study"
+        )
+    }
+
     func testBookPayloadDecodesLegacyLocationIntoDynamicLocationID() throws {
         let json = """
         {
