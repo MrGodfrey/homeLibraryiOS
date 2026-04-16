@@ -7,6 +7,7 @@
 
 import CloudKit
 import Foundation
+import SwiftUI
 import XCTest
 @testable import homeLibrary
 
@@ -150,6 +151,19 @@ final class homeLibraryTests: XCTestCase {
         )
 
         XCTAssertEqual(filtered.map(\.id), ["algorithms", "bai-ye-xing", "san-ti"])
+    }
+
+    func testBookGridLayoutUsesThreeColumnsOnCompactWidth() {
+        let layout = LibraryBookGridLayout(availableWidth: 353, horizontalSizeClass: .compact)
+
+        XCTAssertEqual(layout.columnCount, 3)
+        XCTAssertEqual(layout.cardWidth, 107, accuracy: 0.001)
+    }
+
+    func testBookGridLayoutKeepsAdaptiveColumnsOnRegularWidth() {
+        let layout = LibraryBookGridLayout(availableWidth: 720, horizontalSizeClass: .regular)
+
+        XCTAssertEqual(layout.columnCount, 4)
     }
 
     func testNormalizesDraftFieldsAndCustomFieldsBeforeSave() {

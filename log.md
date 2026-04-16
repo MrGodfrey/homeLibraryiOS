@@ -205,3 +205,28 @@
 - 将仓库设置、录入、编辑、删除、共享、导入导出等内容收拢到“用户接口”章节，按用户视角重新组织。
 - 将数据模型、数据库模型、本地缓存、同步处理、测试覆盖整理到单独的“架构层”章节，并按当前代码实现详细说明 CloudKit 同步链路。
 - 新增“预期实现的其他功能”章节，作为后续演进方向说明。
+
+## 2026-04-16（首页书墙改为手机三列）
+
+- 调整首页书墙网格：在紧凑宽度下默认按三列展示，缩小单本书封面占比；常规宽度下继续保持现有自适应列数和最多四列的策略。
+- 补充布局回归测试：新增 `LibraryBookGridLayout` 单测，覆盖手机三列和宽屏自适应列数两种情况。
+- 同步更新 `README.md` 首页浏览说明，补充手机竖屏默认三列展示的当前行为。
+
+### 验证记录
+
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' build` 通过
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryTests -only-testing:homeLibraryUITests test` 通过
+- 共执行 `44` 个测试，其中 `1` 个 CloudKit live 测试按预期跳过，其余全部通过
+
+## 2026-04-16（首页书墙改为无框极小标题）
+
+- 收紧首页书籍卡片：移除外层白色卡片框、描边和阴影，默认只显示封面与下方极小标题，不再显示作者。
+- 调整首页标题样式：书名字号明显缩小，并限制为两行，降低封面下方文字占用。
+- 保留原有选择逻辑：点击后仍可在封面上显示编辑、删除操作遮罩，其他交互不变。
+- 同步更新 `README.md` 首页浏览说明，改成当前“紧凑书墙 + 极小标题”的展示描述。
+
+### 验证记录
+
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' build` 通过
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryTests -only-testing:homeLibraryUITests test` 通过
+- 共执行 `44` 个测试，其中 `1` 个 CloudKit live 测试按预期跳过，其余全部通过

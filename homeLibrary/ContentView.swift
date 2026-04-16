@@ -569,7 +569,6 @@ private extension LibrarySyncStatus {
 }
 
 private struct LibraryBookCard: View {
-    static let cardPadding: CGFloat = 8
     private static let coverAspectRatio: CGFloat = 0.72
 
     let book: Book
@@ -580,19 +579,15 @@ private struct LibraryBookCard: View {
     let onEdit: () -> Void
     let onDelete: () -> Void
 
-    private var contentWidth: CGFloat {
-        cardWidth - Self.cardPadding * 2
-    }
-
     private var coverHeight: CGFloat {
-        contentWidth / Self.coverAspectRatio
+        cardWidth / Self.coverAspectRatio
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 6) {
             ZStack {
                 BookThumbnail(assetID: book.coverAssetID, coverLoader: coverLoader)
-                    .frame(width: contentWidth, height: coverHeight)
+                    .frame(width: cardWidth, height: coverHeight)
 
                 if isSelected {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -613,38 +608,24 @@ private struct LibraryBookCard: View {
                     }
                 }
             }
-            .frame(width: contentWidth, height: coverHeight)
+            .frame(width: cardWidth, height: coverHeight)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text(book.title)
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(LibraryTheme.title)
-                    .lineLimit(3)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Text(book.displayAuthor)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(LibraryTheme.bodyText)
-                    .lineLimit(1)
+            .overlay {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(LibraryTheme.accent.opacity(0.45), lineWidth: 2)
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 10)
-            .padding(.bottom, 10)
+
+            Text(book.title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(LibraryTheme.bodyText)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(8)
         .frame(width: cardWidth, alignment: .topLeading)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(LibraryTheme.surface)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(isSelected ? LibraryTheme.accent.opacity(0.35) : LibraryTheme.stroke, lineWidth: 1)
-        }
-        .shadow(color: Color.black.opacity(0.05), radius: 12, x: 0, y: 6)
-        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { onTap() }
@@ -670,11 +651,11 @@ private struct LibraryBookCard: View {
     }
 }
 
-private struct LibraryBookGridLayout {
+struct LibraryBookGridLayout {
     static let minimumCardWidth: CGFloat = 152
     static let columnSpacing: CGFloat = 16
     static let rowSpacing: CGFloat = 20
-    private static let compactColumnCount = 2
+    private static let compactColumnCount = 3
     private static let regularMaximumColumnCount = 4
 
     let availableWidth: CGFloat
@@ -683,16 +664,16 @@ private struct LibraryBookGridLayout {
     var rowSpacing: CGFloat { Self.rowSpacing }
 
     var columnCount: Int {
+        if horizontalSizeClass != .regular {
+            return Self.compactColumnCount
+        }
+
         let maxColumnsThatFit = max(
             1,
             Int((availableWidth + Self.columnSpacing) / (Self.minimumCardWidth + Self.columnSpacing))
         )
 
-        if horizontalSizeClass == .regular {
-            return min(maxColumnsThatFit, Self.regularMaximumColumnCount)
-        }
-
-        return min(maxColumnsThatFit, Self.compactColumnCount)
+        return min(maxColumnsThatFit, Self.regularMaximumColumnCount)
     }
 
     var cardWidth: CGFloat {
