@@ -109,6 +109,11 @@ struct RepositoryManagementView: View {
                 }
             }
         }
+        .overlay {
+            if let progress = store.exportProgress {
+                exportProgressOverlay(progress)
+            }
+        }
     }
 
     private var currentRepositorySection: some View {
@@ -185,6 +190,7 @@ struct RepositoryManagementView: View {
                     )
                 }
                 .disabled(store.isCreatingRepository || store.isImportingLegacyData)
+                .buttonStyle(RepositoryManagementActionButtonStyle())
                 .accessibilityIdentifier("createOwnedRepositoryButton")
             }
         }
@@ -218,6 +224,7 @@ struct RepositoryManagementView: View {
                 )
             }
             .disabled(store.isCreatingRepository || store.isImportingLegacyData)
+            .buttonStyle(RepositoryManagementActionButtonStyle())
             .accessibilityIdentifier("createOwnedRepositoryButton")
         }
         header: {
@@ -248,6 +255,7 @@ struct RepositoryManagementView: View {
             } label: {
                 formActionLabel(title: "新增地点", systemName: "plus", tint: LibraryTheme.accent)
             }
+            .buttonStyle(RepositoryManagementActionButtonStyle())
             .accessibilityIdentifier("addLocationButton")
         }
         header: {
@@ -273,6 +281,7 @@ struct RepositoryManagementView: View {
                 } label: {
                     formActionLabel(title: "邀请家人加入", systemName: "person.crop.circle.badge.plus", tint: LibraryTheme.accent)
                 }
+                .buttonStyle(RepositoryManagementActionButtonStyle())
             }
 
             if store.canAcceptShareLinks {
@@ -362,6 +371,7 @@ struct RepositoryManagementView: View {
                 )
             }
             .disabled(store.isCreatingRepository || store.isImportingLegacyData || store.isCompressingCovers)
+            .buttonStyle(RepositoryManagementActionButtonStyle())
             .accessibilityIdentifier("compressRepositoryCoversButton")
 
             Button {
@@ -374,6 +384,7 @@ struct RepositoryManagementView: View {
                 )
             }
             .disabled(store.isCreatingRepository || store.isImportingLegacyData)
+            .buttonStyle(RepositoryManagementActionButtonStyle())
             .accessibilityIdentifier("importLegacyJSONButton")
 
             Button {
@@ -383,8 +394,14 @@ struct RepositoryManagementView: View {
                     }
                 }
             } label: {
-                formActionLabel(title: "导出当前仓库 ZIP", systemName: "square.and.arrow.up", tint: LibraryTheme.accent)
+                formActionLabel(
+                    title: store.isExportingRepository ? "导出中..." : "导出当前仓库 ZIP",
+                    systemName: "square.and.arrow.up",
+                    tint: LibraryTheme.accent
+                )
             }
+            .disabled(store.isExportingRepository)
+            .buttonStyle(RepositoryManagementActionButtonStyle())
             .accessibilityIdentifier("exportRepositoryButton")
 
             Button(role: .destructive) {
@@ -397,6 +414,7 @@ struct RepositoryManagementView: View {
                     textColor: LibraryTheme.destructive
                 )
             }
+            .buttonStyle(RepositoryManagementActionButtonStyle())
             .accessibilityIdentifier("clearRepositoryButton")
         }
         header: {
@@ -412,6 +430,47 @@ struct RepositoryManagementView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityIdentifier("repositoryManagementStatusText")
+    }
+
+    private func exportProgressOverlay(_ progress: RepositoryExportProgress) -> some View {
+        ZStack {
+            Color.black.opacity(0.18)
+                .ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 14) {
+                Text("正在导出当前仓库")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(LibraryTheme.title)
+
+                Text("请稍候，导出完成后会自动打开系统共享。")
+                    .font(.footnote)
+                    .foregroundStyle(LibraryTheme.secondaryText)
+
+                ProgressView(value: progress.progressValue, total: 1)
+                    .tint(LibraryTheme.accent)
+                    .accessibilityIdentifier("repositoryExportProgressBar")
+
+                Text(progress.statusText)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(LibraryTheme.bodyText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("repositoryExportProgressText")
+            }
+            .padding(20)
+            .frame(maxWidth: 320, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(LibraryTheme.surface)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(LibraryTheme.stroke, lineWidth: 1)
+            }
+            .shadow(color: Color.black.opacity(0.08), radius: 18, y: 10)
+            .padding(.horizontal, 24)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("repositoryExportProgressOverlay")
+        }
     }
 
     private func repositoryRow(for repository: LibraryRepositoryReference) -> some View {
@@ -642,7 +701,11 @@ struct RepositoryManagementView: View {
             Text(title)
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(textColor)
+
+            Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
     }
 
     @MainActor
@@ -659,6 +722,19 @@ struct RepositoryManagementView: View {
 private struct ActivitySheetItem: Identifiable {
     let id = UUID()
     let url: URL
+}
+
+private struct RepositoryManagementActionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(configuration.isPressed ? LibraryTheme.surfaceSecondary : Color.clear)
+            )
+            .opacity(configuration.isPressed ? 0.92 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
 }
 
 private struct SharingControllerItem: Identifiable {

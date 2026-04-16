@@ -167,6 +167,43 @@ nonisolated struct RepositoryImportProgress: Equatable, Sendable {
     }
 }
 
+nonisolated struct RepositoryExportProgress: Equatable, Sendable {
+    enum Phase: String, Equatable, Sendable {
+        case preparing
+        case encoding
+        case archiving
+    }
+
+    let phase: Phase
+    let bookCount: Int?
+
+    var progressValue: Double {
+        switch phase {
+        case .preparing:
+            return 0.2
+        case .encoding:
+            return 0.62
+        case .archiving:
+            return 0.9
+        }
+    }
+
+    var statusText: String {
+        switch phase {
+        case .preparing:
+            return "正在读取当前仓库内容..."
+        case .encoding:
+            if let bookCount {
+                return "正在整理 \(bookCount) 本书与封面..."
+            }
+
+            return "正在整理导出内容..."
+        case .archiving:
+            return "正在生成 ZIP 文件..."
+        }
+    }
+}
+
 nonisolated struct RepositorySessionStore: Sendable {
     let namespace: String
 

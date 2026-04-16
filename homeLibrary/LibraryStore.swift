@@ -60,9 +60,11 @@ final class LibraryStore: ObservableObject {
     @Published var alertMessage: String?
     @Published private(set) var importProgress: RepositoryImportProgress?
     @Published private(set) var coverCompressionProgress: RepositoryCoverCompressionProgress?
+    @Published private(set) var exportProgress: RepositoryExportProgress?
     @Published private(set) var latestExportURL: URL?
     @Published private(set) var isAcceptingShareLink = false
     @Published private(set) var isCompressingCovers = false
+    @Published private(set) var isExportingRepository = false
 
     private let configuration: LibraryAppConfiguration
     private let cacheStore: LibraryCacheStore
@@ -585,14 +587,28 @@ final class LibraryStore: ObservableObject {
             return nil
         }
 
+        guard !isExportingRepository else {
+            return nil
+        }
+
+        isExportingRepository = true
+        exportProgress = RepositoryExportProgress(phase: .preparing, bookCount: nil)
+        latestExportURL = nil
+        defer {
+            isExportingRepository = false
+            exportProgress = nil
+        }
+
         do {
             let package = try await remoteService.exportRepository(repository)
+            exportProgress = RepositoryExportProgress(phase: .encoding, bookCount: package.books.count)
             let data = try LibraryJSONCodec.makeEncoder().encode(package)
             let exportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("homeLibrary-exports", isDirectory: true)
             try FileManager.default.createDirectory(at: exportDirectory, withIntermediateDirectories: true)
 
             let sanitizedName = repository.name.replacingOccurrences(of: "/", with: "-").trimmed.nilIfEmpty ?? "homeLibrary"
             let url = exportDirectory.appendingPathComponent("\(sanitizedName)-\(Int(Date().timeIntervalSince1970)).zip")
+            exportProgress = RepositoryExportProgress(phase: .archiving, bookCount: package.books.count)
             try LibraryZipArchiveWriter.writeSingleFileArchive(filename: "LibraryImport.json", fileData: data, to: url)
             latestExportURL = url
             return url

@@ -268,3 +268,17 @@
 
 - `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryTests -only-testing:homeLibraryUITests test` 通过
 - 共执行 `50` 个测试，其中 `1` 个 CloudKit live 测试按预期跳过，其余全部通过
+
+## 2026-04-16（仓库设置按钮按下反馈与导出等待进度）
+
+- 给仓库设置页里的主要操作按钮补了统一的按下态：点按时会出现轻微变色反馈，避免看起来像没有响应。
+- 调整导出当前仓库 ZIP 的交互：导出开始后，会先弹出一个类似 alert 的模态进度层，显示当前正在读取数据、整理内容和生成 ZIP。
+- 导出完成后，模态进度层会自动关闭，并继续打开系统共享面板；用户不再需要猜当前是否仍在工作。
+- 新增 `LibraryExportProgressTests.swift`，覆盖导出开始时进度状态发布，以及导出结束后状态清理。
+- 同步更新 `README.md`，补充仓库设置页按钮反馈、导出等待进度和最新测试数量说明。
+
+### 验证记录
+
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryTests test` 通过
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryTests -only-testing:homeLibraryUITests test` 通过
+- 共执行 `51` 个测试，其中 `1` 个 CloudKit live 测试按预期跳过，其余全部通过
