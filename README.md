@@ -2,284 +2,309 @@
 
 `homeLibrary` 是一个面向 iPhone 的家庭书库应用。
 
-它的核心目标不是“把书存进 CloudKit”这么简单，而是让一个家庭围绕同一套书库长期使用：主人维护仓库，家庭成员通过 iCloud 标准共享加入；首页专注浏览与查找；仓库设置页承接迁移、地点配置、清空、导出和共享管理。
+它解决的不是“把书一条条记下来”这么简单，而是把分散在家里不同地方、由不同家庭成员共同使用的图书，整理成一套长期可维护、可查找、可共享的家庭书库。
 
-## 0. 当前项目实际补充
+当前版本聚焦四件事：
 
-下面的 `1` 到 `7` 节需求文档已经恢复保留。这一节只补当前代码已经落地的实现信息，方便把 README 和仓库现状对齐；如果和后文需求表述有细微出入，以当前代码实现为准。
-
-### 0.1 当前已实现的功能
-
-- 创建自有仓库，默认初始化 `成都`、`重庆` 两个地点
-- 浏览当前仓库书籍，支持搜索、地点筛选、下拉刷新
-- 在仓库设置里为当前仓库选择图书排序方式：按作者首字母、按标题首字母、按添加时间、按修改时间；默认按添加时间
-- 新增、编辑、删除书籍
-- 从相册选择或替换封面
-- 在仓库设置里管理地点：新增、删除、拖拽排序、控制是否显示在首页筛选；修改后立即生效
-- 查看并切换当前设备可访问的仓库
-- owner 通过系统 `UICloudSharingController` 邀请家人加入
-- member 通过系统回调或手动粘贴 iCloud 分享链接加入共享仓库
-- 通过仓库设置页导入旧 JSON 包
-- 导出当前仓库为 ZIP，包内只有一个 `LibraryImport.json`
-- 清空当前仓库
-- 本地缓存当前仓库快照和封面，并恢复上次选中的仓库
-
-### 0.2 当前项目形态
-
-- SwiftUI iOS 应用
-- 目标设备：iPhone（`TARGETED_DEVICE_FAMILY = 1`）
-- Deployment target：`iOS 26.4`
-- Scheme：`homeLibrary`
-- Bundle ID：`yu.homeLibrary`
-- CloudKit container：`iCloud.yu.homeLibrary`
-
-当前默认后端是 CloudKit；测试默认切到内存后端。
-
-### 0.3 当前 UI 和数据模型补充
-
-当前代码里，一个家庭书库对应一个 CloudKit 自定义 zone：
-
-- owner 从 `privateCloudDatabase` 访问
-- member 从 `sharedCloudDatabase` 访问
-- zone 根记录类型：`LibraryRepository`
-- 书籍记录类型：`LibraryBook`
-- 地点记录类型：`LibraryLocation`
-
-地点已经不是写死枚举。代码仍然保留 `成都` / `重庆` 作为默认地点，但每个仓库都可以独立修改地点列表和首页筛选可见性。
-
-图书排序方式也是仓库级配置。当前支持：
-
-- 按作者首字母排序
-- 按标题首字母排序
-- 按添加时间排序
-- 按修改时间排序
-
-其中作者和标题的排序会把中文转换为拼音后再与英文统一比较。
-
-书籍当前 UI 可编辑的字段是：
-
-- 书名
-- 作者
-- 出版社
-- 出版年份
-- 所在地点
-- 封面
-
-导入数据里的 `customFields` 仍会保留，搜索时也会参与匹配，但当前 UI 没有单独的自定义字段编辑入口。
-
-### 0.4 本地运行
-
-1. 用 Xcode 打开 [homeLibrary.xcodeproj](homeLibrary.xcodeproj)
-2. 选择 `homeLibrary` scheme
-3. 直接运行到 iPhone 模拟器或真机
-
-如果只是想调 UI，不想依赖 iCloud / CloudKit，可以给运行 Scheme 加环境变量：
-
-```text
-HOME_LIBRARY_REMOTE_DRIVER=memory
-```
-
-这时仓库、图书和地点都走内存后端，分享相关能力不会启用。
-
-### 0.5 常用环境变量
-
-| 变量 | 作用 |
-| --- | --- |
-| `HOME_LIBRARY_REMOTE_DRIVER` | 后端实现，`cloudkit` 或 `memory` |
-| `HOME_LIBRARY_STORAGE_ROOT` | 覆盖本地存储根目录 |
-| `HOME_LIBRARY_STORAGE_NAMESPACE` | 隔离本地缓存命名空间 |
-| `HOME_LIBRARY_SESSION_NAMESPACE` | 隔离当前仓库会话命名空间 |
-| `HOME_LIBRARY_CLOUDKIT_CONTAINER` | 覆盖 CloudKit container |
-| `HOME_LIBRARY_PREFERRED_REPOSITORY_NAME` | 创建 owner 仓库时的默认名称 |
-| `HOME_LIBRARY_DEBUG_CLOUDKIT` | 输出更多 CloudKit 调试日志 |
-| `HOME_LIBRARY_CLOUDKIT_LIVE_TESTS` | 显式开启真实 CloudKit 集成测试 |
-
-测试运行器注入环境变量时，代码也兼容 `TEST_RUNNER_` 前缀。
-
-### 0.6 导入与导出
-
-仓库设置页当前通过文件选择器导入单个 `.json` 文件，兼容：
-
-- 旧版 `books.json`
-- `LibraryImport.json`
-- `SeedBooks.json`
-- 旧格式书籍数组 JSON
-
-底层导入器还保留了对这些输入的兼容逻辑，主要用于测试和历史迁移：
-
-- 结构化旧目录：`books/`、`covers/`、`deletions/`
-
-导出入口在仓库设置页，输出为 ZIP 文件，压缩包里只有一个 `LibraryImport.json`。封面会内嵌在导出内容里。
-
-### 0.7 测试入口
-
-仓库当前包含三类测试：
-
-- `homeLibraryTests/`：业务逻辑、配置切换、仓库流程、导入导出、持久化、排序和设置行为
-- `homeLibraryUITests/`：最基本的建库、加书、搜索主流程，以及仓库设置页关键入口
-- `homeLibraryTests/CloudKitLiveIntegrationTests.swift`：显式开启时运行的真实 CloudKit 集成测试
-
-默认单测和 UI 测试都使用内存后端。直接在 Xcode 里跑 `Test` 即可。
-
-命令行示例：
-
-```bash
-xcodebuild test \
-  -project homeLibrary.xcodeproj \
-  -scheme homeLibrary \
-  -destination 'platform=iOS Simulator,name=iPhone 17'
-```
-
-如果要跑真实 CloudKit 集成测试，需要额外注入：
-
-```text
-HOME_LIBRARY_REMOTE_DRIVER=cloudkit
-HOME_LIBRARY_CLOUDKIT_LIVE_TESTS=1
-HOME_LIBRARY_STORAGE_NAMESPACE=cloudkit-live-tests
-```
-
-另外，仓库里还有一个双模拟器共享验证脚本：
-
-- [scripts/run_dual_sim_cloudkit_share_test.swift](scripts/run_dual_sim_cloudkit_share_test.swift)
-
-它用于验证 owner / member 两端的 CloudKit 共享、写入、同步和清理流程，不属于默认 XCTest 用例。
-
-### 0.8 相关文件
-
-- [homeLibrary/ContentView.swift](homeLibrary/ContentView.swift)：主界面
-- [homeLibrary/RepositoryManagementView.swift](homeLibrary/RepositoryManagementView.swift)：仓库设置、地点管理、共享、导入导出
-- [homeLibrary/LibraryStore.swift](homeLibrary/LibraryStore.swift)：状态管理和主要业务流程
-- [homeLibrary/LibrarySync.swift](homeLibrary/LibrarySync.swift)：CloudKit / 内存后端
-- [homeLibrary/LibraryPersistence.swift](homeLibrary/LibraryPersistence.swift)：缓存、导入器、ZIP 导出
-- [TEST.md](TEST.md)：测试覆盖说明
-- [scripts/import_from_cloudflare.mjs](scripts/import_from_cloudflare.mjs)：旧 Cloudflare 数据转换脚本
+- 在一个页面看到家里一共有多少书
+- 记清每本书最基本、最有用的信息
+- 让家里多个人共同使用同一套书库
+- 除此之外，先不做复杂功能
 
 ## 1. 设计方式
 
-- 需求先于实现  
-  先问这个应用要长期服务什么，再决定 CloudKit、缓存、页面结构和测试分层怎么写。
+### 1.1 需求先于实现
 
-- 最简单可行架构  
-  只保留满足需求所需的最小结构：一个仓库一个 CloudKit 自定义 zone，主人在 `privateCloudDatabase` 持有，成员在 `sharedCloudDatabase` 访问。
+先回答“这个应用到底要替谁解决什么问题”，再决定页面、数据和同步怎么设计。
 
-- 系统共享优先  
-  家庭协作只走 `CKShare`，不再自造仓库账号密码，不再维护额外身份体系。
+这个项目不是为了展示技术栈而做的，而是为了让一个家庭长期管理自己的书。只要某个功能不能直接帮助“找书、记书、共用书”，它就不该先进入当前版本。
 
-- 默认测试稳定，真网测试显式  
-  常规单测和 UI 测试继续走内存驱动；真实 CloudKit 测试只在显式入口下运行，不污染默认测试路径。
+### 1.2 变更可追踪
 
-- 变更可追踪  
-  每次结构性修改、测试环境调整和 CloudKit 经验结论，都要追加写入 `log.md`。
+家庭书库最怕的是越用越乱：为什么字段变了、为什么同步规则变了、为什么导入方式变了，最后谁也说不清。
 
-## 2. 需求
+所以本仓库要求重要改动留下记录。结构性调整会追加写入 `log.md`，而不是覆盖历史；对外说明会同步更新到 `README.md`。这样做的目标很简单：以后回头看，能知道系统为什么会变成现在这样。
 
-### 2.1 这个应用要长期解决什么问题？
+### 1.3 简单优先
 
-1. 一个家庭需要共享同一套书库，而不是每个人维护一份分裂的副本。
-2. 书库中的“地点”不是写死枚举，而是仓库级配置。
-3. 浏览体验要优先于后台信息展示：首页只看书，不看仓库承载细节。
-4. 旧数据必须能迁进来，而且迁移过程要可见、可验证。
-5. CloudKit 相关问题要能被定位，不能只给一个模糊的“网络失败”。
+这不是一个“大而全”的图书平台。
 
-### 2.2 当前版本必须做到什么？
+当前版本只保留最必要的动作：建库、看总量、按地点找书、录入基础信息、让家人共享、导入旧数据、导出备份。这样可以让界面更直接，也能让长期维护更稳定。
 
-- 主人可创建自有仓库。
-- 仓库通过 `CKShare` 共享给家庭成员。
-- 成员从 `sharedCloudDatabase` 访问共享仓库。
-- 书籍、地点、导出、清空都围绕“当前仓库”执行。
-- 每个仓库都可以独立保存图书排序方式。
-- 首页支持动态地点切换、双栏书墙、悬浮搜索和两段式卡片操作。
-- 仓库设置页支持地点配置、高级管理区和系统共享入口。
-- 旧结构数据可一次性迁移到新仓库。
-- 默认测试稳定可重复；真实 CloudKit 集成测试可在已登录测试 iCloud 的 `iPhone 17` 模拟器上显式运行。
+### 1.4 家庭协作优先
 
-### 2.3 当前版本明确不做什么？
+很多“个人藏书管理”工具最后都会变成一个人的清单。这个项目从一开始就不是按这个方向设计的。
 
-- 不再使用仓库账号密码加入。
-- 不把默认 UI 测试切到真网 CloudKit。
-- 不为 `Development` 和 `Production` 维护两套数据格式。
-- 不在首页显示仓库作用域、角色或 CloudKit 承载信息。
+它默认考虑的是一个家庭共同维护一套书库：有人录入，有人查找，有人补充信息，但看到的仍然应该是同一份数据，而不是几份互相分裂的副本。
 
-## 3. 用户接口
+### 1.5 AI First
 
-### 3.1 首次进入
+这个项目虽然先服务人，但数据结构从第一天开始就按“未来可以服务 AI”来设计。
 
-- 如果当前会话已有仓库，直接进入该仓库。
-- 如果没有仓库但可发现已有仓库，恢复到该仓库。
-- 如果还没有任何仓库，用户可创建自己的家庭书库。
+这里的意思不是先做花哨的 AI 功能，而是先把基础打稳：
 
-### 3.2 浏览、筛选和搜索
+- 书名、作者、出版社、地点等信息要结构化
+- 同一类信息在不同设备上要有稳定含义
+- 重要变更要能追踪
+- 导入、导出、同步不能把数据变成一团难以理解的内容
 
-- 顶部固定透明地点切换条，支持 `全部 + 动态地点列表`。
-- 顶部标题 `家藏万卷` 在向上滚动超过阈值后隐藏。
-- 书籍以双栏书墙展示，稳定显示：封面、标题、作者。
-- 当前仓库的图书列表可按作者、标题、添加时间、修改时间四种方式排序；默认按添加时间。
-- 底部搜索为悬浮毛玻璃控件，不再使用顶部 `.searchable`。
+这样以后无论是做自然语言查找、自动整理、信息补全，还是家庭阅读助手，AI 都能直接基于现有数据工作，而不需要先重建一遍底层数据。
 
-### 3.3 录入、编辑和删除
+## 2. 这个仓库满足什么需求
 
-- 新建书籍默认沿用当前地点筛选；如果当前是 `全部`，则回退到仓库默认地点。
-- 编辑页地点列表来自当前仓库配置，不再写死 `成都 / 重庆`。
-- 卡片交互采用两段式：先选中卡片，再点击 `修改 / 删除`。
+面向完全不懂技术的人，可以把这个项目理解成一套“家庭书库总账”。
 
-### 3.4 仓库设置
+| 需求 | 当前版本的回答 |
+| --- | --- |
+| 家里的书放在不同地方，想在一个页面看到一共有多少书 | 支持在首页直接看到当前书库的图书总量，并按地点切换查看 |
+| 每本书至少要记住最重要的信息 | 支持记录书名、作者、出版社、出版年份、封面，以及书放在哪个分区/地点 |
+| 家里不止一个人要用 | 支持多人共同使用同一套家庭书库 |
+| 功能不要越做越复杂 | 当前版本只做家庭书库管理主线，其他复杂能力明确不加 |
 
-仓库设置页当前主要分成六块：
+如果用“管理家中图书”这个具体场景来讲，这个仓库当前主要解决的是：
 
-1. 当前仓库  
-   当前仓库名称、角色、数据库和共享状态。
-2. 可访问的仓库  
-   查看当前设备可访问仓库，并切换到其他仓库。
-3. 图书排序  
-   为当前仓库选择作者 / 标题 / 添加时间 / 修改时间排序。
-4. 地点配置  
-   新增、删除、拖拽排序、控制是否显示在首页；修改后直接生效。
-5. 共享  
-   owner 通过系统共享邀请家人，member 可手动粘贴 iCloud 分享链接。
-6. 高级管理区  
-   旧数据迁移、清空当前仓库、导出当前仓库 zip。
+1. 书分散在书房、客厅、不同城市或不同房间时，仍然能统一统计和查找。
+2. 图书资料不只是一串名字，还能保留作者、出版社、出版年份和封面。
+3. 一家人可以围绕同一套书库一起维护，而不是每个人各记一份。
+4. 除了这些最核心的能力，暂时不往外扩展。
 
-### 3.5 共享
+## 3. 当前版本功能
 
-- 只有 owner 可以发起共享。
-- 分享入口走系统 `UICloudSharingController`。
-- 接受分享走系统回调和 `CKAcceptSharesOperation`。
-- 成员加入后从 `sharedCloudDatabase` 读取和写入共享仓库。
+当前版本对普通用户可见的功能很少，但都很直接：
 
-## 4. 数据与同步架构
+1. 创建自己的家庭书库
+2. 在首页查看图书总量
+3. 按地点筛选图书
+4. 搜索书名、作者或 ISBN
+5. 添加、编辑、删除图书
+6. 记录封面、作者、出版社、出版年份和存放地点
+7. 管理地点列表，包括新增、删除、隐藏和排序
+8. 让家庭成员共同使用同一套书库
+9. 在当前设备上切换可访问的书库
+10. 导入旧数据、导出备份、清空当前书库
 
-### 4.1 仓库模型
+## 4. 明确不做的功能
 
-每个家庭书库对应一个 CloudKit 自定义 zone。
+当前版本明确不做下面这些事：
 
-- owner 数据库：`privateCloudDatabase`
-- member 数据库：`sharedCloudDatabase`
-- zone 根记录：`LibraryRepository`
-- 书籍记录：`LibraryBook`
-- 地点记录：`LibraryLocation`
+- 不做借书、还书、罚金、审批这类流程
+- 不做评分、评论、社区、推荐流
+- 不做复杂标签系统和大量自定义字段编辑
+- 不做扫码录入、自动抓取电商资料、自动补全所有书籍信息
+- 不做与“家庭书库管理”无关的大量设置项
 
-`LibraryRepositoryReference` 现在是 share-aware 的，至少包含：
+换句话说，这个项目不是要把图书管理做成一个平台，而是先把“家里的书到底有哪些、放在哪、谁都能查到”这件事做好。
 
-- 仓库 id
-- 显示名
-- 角色
-- 数据库作用域
-- zone 标识
-- share record 标识
-- share 状态
+## 5. 需求完成情况
 
-### 4.2 书籍与地点
+当前版本可以先用三个问题来检验自己：
 
-- 旧 `BookLocation` 枚举已经废弃。
-- 书籍主模型现在保存 `locationID`。
-- 仓库级 `LibraryLocation` 负责名称、排序和显示控制。
-- 首页的“全部”只是 UI 虚拟筛选项，不进入持久化。
+1. 我系统的目标是什么？
+2. 我希望系统稳定地保存什么状态？
+3. 系统要和哪些外部对象保持联系，哪些边界绝不能破坏？
 
-### 4.3 本地缓存
+### 5.1 我系统的目标是什么？
 
-本地缓存只承担当前仓库快照与封面缓存，不承担独立同步源职责。
+当前版本的回答是：
 
-目录结构：
+把“一家人共用的一套家庭书库”做成一份稳定、长期可维护的总账。首页优先展示书和数量，而不是一堆后台概念。用户打开应用后，首先看到的应该是“有什么书、放在哪、怎么找”，而不是“同步状态怎么实现”。
+
+### 5.2 我希望系统稳定地保存什么状态？
+
+当前版本稳定保存的是下面这些状态：
+
+- 当前家庭书库是谁
+- 书库里一共有多少本书
+- 每本书的标题、作者、出版社、出版年份、封面和地点
+- 地点列表本身，以及地点的显示顺序和是否显示
+- 当前书库自己的排序方式
+- 当前设备上次选择的是哪座书库
+
+这意味着：就算设备切换、共享关系变化、或者需要导入旧数据，系统也必须尽量保证这些核心状态不丢、不乱、不互相串线。
+
+### 5.3 系统要和哪些外部对象保持联系，哪些边界绝不能破坏？
+
+当前版本需要长期和下面这些外部对象打交道：
+
+- 家庭成员
+- Apple ID / iCloud
+- 导入进来的旧数据文件
+- 导出的备份文件
+- 设备本地缓存
+
+同时，有几条边界不能被破坏：
+
+- 不同书库的数据不能混在一起
+- 家庭成员看到的应该是同一套书库，而不是各自的副本
+- 导入旧数据时，主要图书信息不能静默丢失
+- 删除、清空、切换书库时，作用范围必须清楚
+- 同步失败时，用户至少要收到能看懂的提示
+
+### 5.4 这三个问题是否已经覆盖当前项目的细节？
+
+基本覆盖了主线，但还不够细。
+
+当前版本还需要继续回答一些从主问题里派生出来的小问题，例如：
+
+- 地点是不是每座书库自己定义，而不是写死
+- 排序方式是不是跟着书库走，而不是全局共用
+- 家人加入后是不是立刻进入同一套书库
+- 旧数据里的旧地点和 ISBN 怎么保留下来
+- 导出和清空之后，书库边界会不会被弄乱
+
+这些都不是另一套目标，而是上面三个大问题在实际产品里的细化版本。
+
+## 6. 用户接口
+
+这一节只讲用户实际会碰到的功能，不讲底层怎么实现。
+
+### 6.1 首次进入
+
+- 如果当前设备已经有正在使用的书库，应用会直接进入那座书库
+- 如果设备上还没有可用书库，用户可以直接创建自己的家庭书库
+- 如果别人已经把书库共享给你，也可以在应用里加入并切换到这套书库
+
+### 6.2 首页浏览
+
+- 首页会显示当前筛选结果一共有多少本书
+- 图书以书墙形式展示，重点信息是封面、书名和作者
+- 支持按地点切换查看
+- 支持搜索书名、作者或 ISBN
+- 支持下拉刷新，重新读取当前书库
+
+### 6.3 录入、编辑、删除
+
+- 可以新增一本书
+- 可以修改已有书籍的信息
+- 可以删除一本书
+- 录入时支持填写书名、作者、出版社、出版年份和地点
+- 可以为图书添加或替换封面
+
+### 6.4 仓库设置
+
+仓库设置页当前负责几件很具体的事：
+
+1. 查看当前正在使用的是哪座书库
+2. 查看当前设备能访问哪些书库，并切换过去
+3. 给当前书库选择图书排序方式
+4. 管理地点列表，包括新增、删除、隐藏和排序
+5. 发起共享，邀请家人加入
+6. 导入旧数据、导出当前书库、清空当前书库
+
+### 6.5 家庭协作
+
+- 书库拥有者可以邀请家人加入
+- 家庭成员加入后，使用的是同一套书库数据
+- 当前设备可以区分“我自己的书库”和“别人共享给我的书库”
+- 共享之后，录入、编辑、删除都会直接作用在当前书库上
+
+### 6.6 数据迁移与备份
+
+- 支持从旧数据文件导入
+- 支持把当前书库导出为备份包
+- 支持在需要时清空当前书库并恢复默认地点
+
+## 7. 架构层
+
+这一节开始进入技术细节，主要写给需要了解实现方式的人。
+
+### 7.1 工程概况
+
+- 平台：iPhone
+- 界面框架：SwiftUI
+- Scheme：`homeLibrary`
+- Bundle ID：`yu.homeLibrary`
+- iCloud 容器：`iCloud.yu.homeLibrary`
+- 默认运行方式：真实环境走 iCloud 云同步，测试默认走内存远端
+
+### 7.2 整体模型
+
+当前系统的整体模型非常直接：
+
+- 一个家庭书库，对应一座独立的仓库
+- 一座仓库里有两类核心内容：图书和地点
+- 图书必须属于某个地点
+- 地点属于仓库，不是全局写死常量
+- 一个设备可以访问多座仓库，但同一时刻只操作“当前仓库”
+
+这套模型的目的，是始终把“当前正在管理哪一套书”这件事说清楚，避免多人协作时数据串线。
+
+### 7.3 数据模型与数据库模型
+
+当前代码把一座家庭书库映射为一个 CloudKit 自定义 zone。
+
+#### 7.3.1 仓库级模型
+
+- owner 从 `privateCloudDatabase` 访问自己的书库
+- member 从 `sharedCloudDatabase` 访问共享书库
+- 每个 zone 的根记录类型是 `LibraryRepository`
+- 根记录的固定 record name 是 `repository`
+
+`LibraryRepository` 当前保存的核心字段是：
+
+- `name`
+- `schemaVersion`
+- `createdAt`
+- `updatedAt`
+
+#### 7.3.2 地点模型
+
+地点记录类型是 `LibraryLocation`，record name 形如 `location.<location-id>`。
+
+当前地点记录字段包括：
+
+- `name`
+- `sortOrder`
+- `isVisible`
+
+地点不是写死枚举。代码虽然仍会给新书库初始化 `成都` 和 `重庆` 两个默认地点，但之后每座仓库都可以独立修改自己的地点列表。
+
+#### 7.3.3 图书模型
+
+图书记录类型是 `LibraryBook`，record name 形如 `book.<book-id>`。
+
+当前图书记录字段包括：
+
+- `title`
+- `author`
+- `locationID`
+- `payload`
+- `coverAssetID`
+- `coverAsset`
+- `schemaVersion`
+- `createdAt`
+- `updatedAt`
+
+其中：
+
+- `payload` 里保存结构化书籍内容
+- 当前 UI 可直接编辑的字段是书名、作者、出版社、出版年份、地点和封面
+- `customFields` 仍然保留在数据模型里，用于兼容旧数据，但当前 UI 没有做成独立编辑入口
+
+#### 7.3.4 导入导出模型
+
+导入导出统一使用 `LibraryImportPackage`。
+
+当前包结构包括：
+
+- `schemaVersion`
+- `source`
+- `exportedAt`
+- `locations`
+- `books`
+
+每本导出书籍会同时携带：
+
+- 结构化基础字段
+- 地点信息
+- 兼容旧数据所需的信息
+- 内嵌封面数据
+
+### 7.4 本地缓存
+
+本地缓存不是第二套真源数据，而是当前仓库的快照与封面缓存。
+
+缓存目录结构是：
 
 ```text
 Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
@@ -291,160 +316,182 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
     └── <cover-asset-id>.bin
 ```
 
-### 4.4 迁移与导出
+这层缓存承担三件事：
 
-- 旧 `books/`、`covers/`、`deletions/`、`books.json`、`SeedBooks.json`、`LibraryImport.json` 都可以作为一次性迁移输入。
-- 默认迁移会把旧 `成都 / 重庆` 映射成新的仓库地点配置。
-- 导出统一为 zip，根目录只有 `LibraryImport.json`。
-- 导出包内嵌封面数据，可直接再导入。
+1. 恢复上次使用的仓库内容
+2. 减少重复读取远端数据时的等待
+3. 让封面文件和图书元数据分开存放，避免单条图书记录过重
 
-## 5. CloudKit 环境
+### 7.5 同步处理
 
-### 5.1 当前配置
+这里需要特别说明：当前仓库实际使用的是 Apple 的 `CloudKit` 来处理同步与共享，没有额外自建一套名为 `CloudKey` 的同步服务。
 
-- bundle id：`yu.homeLibrary`
-- CloudKit container：`iCloud.yu.homeLibrary`
-- entitlement：`homeLibrary/homeLibrary.entitlements`
-- `Info.plist`：`CKSharingSupported = true`
+如果从产品角度理解，可以把它看成“系统自带的 iCloud 云同步”；如果从代码角度理解，当前主线实现如下：
 
-### 5.2 Development 和 Production 有什么区别？
+#### 7.5.1 仓库发现
 
-业务模型和数据格式没有区别。
+- 拥有者仓库从 `privateCloudDatabase` 扫描
+- 共享仓库从 `sharedCloudDatabase` 扫描
+- 仓库发现不是依赖整库 query，而是先通过 `databaseChanges(since:)` 找到 zone，再读取每个 zone 的根记录
 
-区别只在：
+这样做的目的是让“发现有哪些书库可用”这件事更稳，尤其是在共享库场景下。
 
-- CloudKit schema 所在环境不同
-- schema 发布节奏不同
-- 真实数据隔离不同
+#### 7.5.2 仓库刷新
 
-也就是说：
+- 确定当前仓库后，按 zone 读取根记录、地点记录和图书记录
+- zone 内数据读取通过 `recordZoneChanges(inZoneWith:since:)` 完成
+- 读取后重新组装为 `RemoteRepositorySnapshot`
 
-- 你不需要为 `Development` 和 `Production` 维护两套导出格式或两套模型
-- 你需要把 schema 变更先在 `Development` 验证，再决定是否部署到 `Production`
+也就是说，应用不是把所有图书都混在一个全局列表里，而是始终围绕“当前 zone 对应的那座仓库”刷新。
 
-### 5.3 真实共享链路
+#### 7.5.3 写入与删除
 
-正确链路是：
+- 新增或编辑图书时，写入 `LibraryBook`
+- 调整地点时，写入或删除 `LibraryLocation`
+- 清空仓库时，会删除书籍记录，并把地点恢复为重置后的列表
+- 删除整座书库时，owner 删除 private zone；member 离开 shared zone
 
-1. owner 在私有 zone 上创建或获取 `CKShare`
-2. 系统分享面板发出邀请链接
-3. 被邀请者接受链接
-4. App 收到分享 metadata
-5. `CKAcceptSharesOperation` 接受共享
-6. 共享仓库出现在 `sharedCloudDatabase`
+记录保存统一通过 `modifyRecords` 执行，并使用原子方式提交，尽量减少半成功半失败的状态。
 
-### 5.4 调试模式
+#### 7.5.4 封面处理
 
-如果要追 CloudKit 失败细节，可打开：
+- 封面二进制内容通过 `CKAsset` 存储
+- 同时生成 `coverAssetID`
+- 本地缓存按 `coverAssetID` 单独保存封面文件
 
-```text
-HOME_LIBRARY_DEBUG_CLOUDKIT=1
-```
+这让“书的数据”和“封面文件”可以分别管理，也让导出时更容易把封面重新嵌入到备份包里。
 
-调试日志会尽量保留脱敏上下文：
+#### 7.5.5 共享协作
 
-- 操作名
-- 数据库作用域
-- zone 名
-- CloudKit 原始错误
-- 用户可见错误映射
+- 共享依赖 `CKShare`
+- owner 通过系统 `UICloudSharingController` 发起邀请
+- 接收方通过分享 metadata 和 `acceptShare` 加入共享
+- 接受成功后，共享仓库会出现在 `sharedCloudDatabase`
 
-### 5.5 关于 QUERYABLE 索引
+当前的核心目标不是自己重造一套权限系统，而是直接复用 Apple 已有的家庭共享机制。
 
-当前主路径已经尽量避免依赖旧公共库架构下的“全库 query + queryable index”。
+#### 7.5.6 冲突与错误处理
 
-仓库发现和 zone 内全量读取现在优先走：
+- 如果遇到 `serverRecordChanged`，当前实现会取服务端记录并回填可写字段后重试
+- 常见 CloudKit 错误会被映射成用户能看懂的中文提示
+- 在调试或 live test 模式下，会记录操作名、数据库作用域、zone 名等上下文日志
 
-- `databaseChanges(since:)`
-- `recordZoneChanges(inZoneWith:since:)`
-- 固定根记录 `repository`
+这部分非常重要，因为多人协作最怕的不是“偶尔失败”，而是“失败以后完全不知道发生了什么”。
 
-因此，旧 README 中把 `recordName` queryable 当成主线前提的说明已经降级为兼容旧实现时的排障补充，而不是当前架构的核心依赖。
+### 7.6 导入、导出与兼容
 
-## 6. 测试策略
+当前导入兼容这些来源：
 
-### 6.1 默认测试
+- `books.json`
+- `LibraryImport.json`
+- `SeedBooks.json`
+- 旧格式书籍数组 JSON
+- 历史目录结构里的 `books/`、`covers/`、`deletions/`
 
-默认单测和 UI 测试继续走内存远端：
+兼容策略包括：
 
-- 快
-- 稳定
-- 可重复
-- 不依赖 iCloud 账号状态
+- 旧 `location` 字段会被归一到新的 `locationID`
+- 旧 `isbn` 会保留到 `customFields["ISBN"]`
+- 缺失地点数组的旧种子文件仍可导入，并推导地点
 
-`LibraryAppConfiguration.live()` 的规则是：
+当前导出统一为 zip，压缩包内只有一个 `LibraryImport.json`，封面数据会内嵌进去，便于后续重新导入。
 
-- `HOME_LIBRARY_REMOTE_DRIVER=cloudkit` 时，即使在 XCTest 宿主下也强制用 CloudKit
-- 未显式指定时，XCTest 默认还是 memory
+### 7.7 测试覆盖
 
-### 6.2 真实 CloudKit 集成测试
+当前仓库共有 **39 个 XCTest**，外加 **1 个双模拟器共享验证脚本**。
 
-当前 live 测试入口：
+#### 7.7.1 单元与状态管理测试
 
-- target：`homeLibraryTests`
-- case：`CloudKitLiveIntegrationTests`
+`homeLibraryTests/homeLibraryTests.swift` 当前包含 **27 个测试**，覆盖的重点包括：
 
-固定约束：
+- 图书筛选
+- 默认排序与按作者/标题排序
+- 中英文统一排序
+- 草稿字段清洗
+- 旧 `location` / `isbn` 数据兼容
+- 当前仓库选择持久化
+- 测试环境与 CloudKit 环境切换
+- 用户可见错误文案
+- 接受共享后的仓库选择逻辑
+- 建库、删库、切换仓库
+- 仓库级排序方式持久化
+- 地点显隐与默认地点即时生效
+- 地点重排保存
+- 导入、导出、清空当前仓库
 
-- CloudKit 环境：`Development`
-- 模拟器：booted `iPhone 17`
-- iCloud 账号：当前模拟器已登录的专用测试账号
-- 数据隔离：`library.live-test.*` zone 前缀
+#### 7.7.2 持久化与导入测试
 
-运行时环境：
+`homeLibraryTests/LibraryPersistenceTests.swift` 当前包含 **8 个测试**，覆盖的重点包括：
 
-```text
-HOME_LIBRARY_REMOTE_DRIVER=cloudkit
-HOME_LIBRARY_STORAGE_NAMESPACE=cloudkit-live-tests
-HOME_LIBRARY_CLOUDKIT_LIVE_TESTS=1
-```
+- 图书元数据和封面文件分离存储
+- 全量替换缓存时的旧资源清理
+- 导出包是否正确内嵌封面
+- 旧目录结构导入
+- 旧版结构化 JSON 导入
+- 显式 `LibraryImport.json` 导入
+- 缺失地点数组的旧 seed 导入
+- seed 地点归一化
 
-如果你用的是支持 test-runner env 的工具，需要把这些变量注入到测试运行器；当前代码也兼容 `TEST_RUNNER_` 前缀环境变量。
+#### 7.7.3 真实云端测试
 
-### 6.3 双模拟器共享 live
+`homeLibraryTests/CloudKitLiveIntegrationTests.swift` 当前包含 **1 个真实 CloudKit 集成测试**，覆盖：
 
-- 跨账号双模拟器共享：
-  - 脚本：`scripts/run_dual_sim_cloudkit_share_test.swift`
-  - owner：booted `iPhone 17`
-  - member：booted `testPhone2`
-  - 本地隔离：owner / member 各自独立 `storage namespace` 与 `session namespace`
-  - 远端隔离：每次运行都创建唯一仓库名和 `library.live-test.*` zone
-  - 收尾：owner 删除测试仓库，member 轮询确认共享仓库从 `sharedCloudDatabase` 消失
-
-- 双模拟器脚本当前验证：
-  - owner 创建测试仓库并生成 `CKShare`
-  - member 接受共享
-  - member 在共享仓库完成书籍新增、读取、修改、删除
-  - owner 验证 member 的修改与删除已同步
-  - 最终自动清理 owner / member 本地测试命名空间
-
-- 自动化约束说明：
-  - 为了让无 UI 的双模拟器脚本能稳定接受 share URL，脚本只在显式测试环境里把临时 `CKShare.publicPermission` 提升到 `.readWrite`
-  - 这条放宽只作用于一次性测试仓库，脚本结束后会删除远端仓库并确认 member 侧共享消失
-  - 正式产品共享路径仍然是 `UICloudSharingController` + private participant，不会因为这套测试 harness 变成公开共享
-
-### 6.4 当前已覆盖的真网能力
-
-- 创建专用测试仓库
-- 仓库发现
-- 写入书籍
-- 读取回显
+- 创建测试仓库
+- 写入一本书
+- 刷新远端快照
 - 导出仓库
 - 清空仓库
-- 自动清理测试仓库
-- 双账号共享加入
-- member 侧共享仓库 CRUD
-- owner 侧跨账号同步验证
+- 清理测试数据
 
-### 6.5 当前仍然保留为手动验收的内容
+这组测试只会在显式开启 `HOME_LIBRARY_CLOUDKIT_LIVE_TESTS=1` 时运行。
+
+#### 7.7.4 UI 测试
+
+当前 UI 测试共有 **3 个**：
+
+- `homeLibraryUITests/homeLibraryUITests.swift`
+  - `testAddAndSearchBookOnIOS`
+  - `testRepositorySettingsShowsBookSortAndManagementOptions`
+- `homeLibraryUITests/homeLibraryUITestsLaunchTests.swift`
+  - `testLaunch`
+
+它们覆盖的重点是：
+
+- 首次建库
+- 新增图书
+- 搜索图书
+- 仓库设置页关键入口
+- 应用能否正常启动
+
+#### 7.7.5 双模拟器共享验证
+
+仓库还提供 `scripts/run_dual_sim_cloudkit_share_test.swift`，用于验证：
+
+- owner 创建共享仓库
+- member 接受共享
+- member 完成新增、读取、修改、删除
+- owner 看到同步结果
+- 测试结束后自动清理
+
+这不是默认 XCTest 的一部分，但对多人协作主线非常重要。
+
+#### 7.7.6 当前仍主要依赖手动验收的部分
+
+自动化测试之外，目前仍更适合手动验收的内容包括：
 
 - owner 移除参与者后的权限变化
-- 真网 UI 层共享验收
-- 指定 Apple ID 私有邀请的完整系统分享面板流程
+- 系统分享面板的完整私有邀请流程
+- 更复杂的异常文件导入场景
+- 大数据量和极端并发下的体验验证
 
-## 7. 仓库约定
+## 8. 预期实现的其他功能
 
-- `README.md` 采用需求优先结构
-- `log.md` 只追加，不回写历史
-- `plan.md` 保留当前主线实施计划
-- 每次结构性修改后，都要补充测试与 CloudKit 环境记录
+后续如果继续完善，仍然应该围绕“家庭书库主线”推进，而不是把范围越做越大。比较值得继续做的方向有：
+
+1. 更顺手的批量录入体验
+2. 更清楚的共享失败与同步失败提示
+3. 更完整的导入失败回滚与诊断信息
+4. 更稳的多设备切换与共享恢复体验
+5. 基于现有结构化数据的 AI 能力，例如自然语言找书、缺失信息提示、重复录入提醒
+
+这些都应该建立在当前这条主线之上：先把家里的书管理清楚，再考虑扩展。
