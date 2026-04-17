@@ -218,6 +218,7 @@
 - 界面框架：SwiftUI
 - Scheme：`homeLibrary`
 - Bundle ID：`yu.homeLibrary`
+- 应用图标：主屏幕图标资源统一由 `homeLibrary/Assets.xcassets/AppIcon.appiconset` 管理，当前已切换到新的图标稿
 - iCloud 容器：`iCloud.yu.homeLibrary`
 - 默认运行方式：真实环境走 iCloud 云同步，测试默认走内存远端
 

@@ -309,3 +309,13 @@
 - `Build iOS Apps / build_sim` 通过
 - `Build iOS Apps / test_sim -only-testing:homeLibraryTests` 通过，共 `46` 个测试，其中 `45` 个通过、`1` 个 CloudKit live 测试按预期跳过
 - `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryUITests test` 通过，`7` 个 UI 测试全部通过
+
+## 2026-04-17（替换应用图标资源）
+
+- 将你在 `/Users/wangyu/code/homeLibraryApp/AppIcons` 准备的新图标稿映射到工程现有的 `homeLibrary/Assets.xcassets/AppIcon.appiconset`，覆盖 iPhone、iPad、CarPlay 和 App Store 营销图标所需尺寸。
+- 保留工程原有 `Contents.json` 声明，只替换对应 PNG 文件，避免改动 target 的资源配置方式。
+- 同步更新 `README.md`，补充当前应用图标资源在工程中的管理位置和状态说明。
+
+### 验证记录
+
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'generic/platform=iOS Simulator' build` 通过
