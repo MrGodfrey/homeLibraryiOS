@@ -15,6 +15,8 @@ struct BookEditorView: View {
     let defaultLocationID: String
     let onDelete: ((Book) async -> Bool)?
     let onSave: (BookDraft, Book?) async -> Bool
+    let onDraftChange: ((BookDraft) -> Void)?
+    let onCancel: (() -> Void)?
 
     @Environment(\.dismiss) private var dismiss
 
@@ -28,10 +30,13 @@ struct BookEditorView: View {
     init(
         editingBook: Book?,
         initialCoverData: Data?,
+        initialDraft: BookDraft? = nil,
         locations: [LibraryLocation],
         defaultLocationID: String,
         onDelete: ((Book) async -> Bool)? = nil,
-        onSave: @escaping (BookDraft, Book?) async -> Bool
+        onSave: @escaping (BookDraft, Book?) async -> Bool,
+        onDraftChange: ((BookDraft) -> Void)? = nil,
+        onCancel: (() -> Void)? = nil
     ) {
         self.editingBook = editingBook
         self.initialCoverData = initialCoverData
@@ -39,7 +44,9 @@ struct BookEditorView: View {
         self.defaultLocationID = defaultLocationID
         self.onDelete = onDelete
         self.onSave = onSave
-        _draft = State(initialValue: BookDraft(
+        self.onDraftChange = onDraftChange
+        self.onCancel = onCancel
+        _draft = State(initialValue: initialDraft ?? BookDraft(
             book: editingBook,
             coverData: initialCoverData,
             defaultLocationID: defaultLocationID
@@ -66,6 +73,7 @@ struct BookEditorView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") {
+                        onCancel?()
                         dismiss()
                     }
                     .disabled(isSaving || isDeleting)
@@ -94,6 +102,9 @@ struct BookEditorView: View {
             .task(id: locations.map(\.id)) {
                 syncLocationSelectionIfNeeded()
             }
+            .onChange(of: draft) { _, newDraft in
+                onDraftChange?(newDraft)
+            }
             .alert(item: $activeAlert) { alert in
                 makeAlert(for: alert)
             }
@@ -120,11 +131,18 @@ struct BookEditorView: View {
                 .accessibilityIdentifier("titleField")
             TextField("作者", text: $draft.author)
                 .accessibilityIdentifier("authorField")
+            TextField("译者", text: $draft.translator)
+                .accessibilityIdentifier("translatorField")
             TextField("出版社", text: $draft.publisher)
                 .accessibilityIdentifier("publisherField")
             TextField("出版年份", text: $draft.year)
                 .keyboardType(.numbersAndPunctuation)
                 .accessibilityIdentifier("yearField")
+            TextField("ISBN", text: $draft.isbn)
+                .keyboardType(.asciiCapable)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .accessibilityIdentifier("isbnField")
 
             Picker("所在地点", selection: locationSelection) {
                 ForEach(locations) { location in

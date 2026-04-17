@@ -166,14 +166,18 @@ final class homeLibraryTests: XCTestCase {
         XCTAssertEqual(layout.columnCount, 4)
     }
 
-    func testNormalizesDraftFieldsAndCustomFieldsBeforeSave() {
+    func testNormalizesDraftFieldsAndManagedBookInfoBeforeSave() {
         let draft = BookDraft(
             title: "  家庭书库  ",
             author: "  王宇  ",
+            translator: "  张三  ",
             publisher: "  自有出版社 ",
             year: " 2026 ",
+            isbn: " 9787111123456 ",
             locationID: "  cd ",
             customFields: [
+                "  \(BookInfoFieldKey.translator)  ": "  旧译者  ",
+                "  \(BookInfoFieldKey.isbn)  ": "  1111111111111  ",
                 "  备注  ": "  已整理  ",
                 "空字段": "   "
             ],
@@ -185,11 +189,38 @@ final class homeLibraryTests: XCTestCase {
 
         XCTAssertEqual(normalized.title, "家庭书库")
         XCTAssertEqual(normalized.author, "王宇")
+        XCTAssertEqual(normalized.translator, "张三")
         XCTAssertEqual(normalized.publisher, "自有出版社")
         XCTAssertEqual(normalized.year, "2026")
+        XCTAssertEqual(normalized.isbn, "9787111123456")
         XCTAssertEqual(normalized.locationID, "cd")
-        XCTAssertEqual(normalized.customFields, ["备注": "已整理"])
+        XCTAssertEqual(
+            normalized.customFields,
+            [
+                "备注": "已整理",
+                BookInfoFieldKey.translator: "张三",
+                BookInfoFieldKey.isbn: "9787111123456"
+            ]
+        )
         XCTAssertTrue(normalized.keepsExistingCoverReference)
+    }
+
+    func testDraftLoadsTranslatorAndISBNFromManagedBookInfo() {
+        let book = Book(
+            id: "book-1",
+            title: "示例书",
+            author: "作者甲",
+            locationID: "cd",
+            customFields: [
+                BookInfoFieldKey.translator: "  译者乙  ",
+                BookInfoFieldKey.isbn: " 9787300000000 "
+            ]
+        )
+
+        let draft = BookDraft(book: book, coverData: nil, defaultLocationID: "fallback")
+
+        XCTAssertEqual(draft.translator, "译者乙")
+        XCTAssertEqual(draft.isbn, "9787300000000")
     }
 
     func testDraftFallsBackToAvailableLocationWhenSelectionIsMissingForNewBook() {

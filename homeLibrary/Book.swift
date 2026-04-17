@@ -10,6 +10,11 @@ import UIKit
 
 typealias PlatformImage = UIImage
 
+nonisolated enum BookInfoFieldKey {
+    nonisolated static let isbn = "ISBN"
+    nonisolated static let translator = "译者"
+}
+
 nonisolated struct LibraryLocation: Identifiable, Hashable, Codable, Sendable {
     let id: String
     var name: String
@@ -271,6 +276,14 @@ nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
         author.trimmed.isEmpty ? "未知作者" : author
     }
 
+    var translator: String {
+        customFields[BookInfoFieldKey.translator]?.trimmed ?? ""
+    }
+
+    var isbn: String {
+        customFields[BookInfoFieldKey.isbn]?.trimmed ?? ""
+    }
+
     var displayPublisherLine: String {
         let publisherText = publisher.trimmed.isEmpty ? "未填写出版社" : publisher
 
@@ -369,8 +382,10 @@ nonisolated struct LegacyBook: Hashable, Decodable, Sendable {
 nonisolated struct BookDraft: Equatable, Sendable {
     var title: String
     var author: String
+    var translator: String
     var publisher: String
     var year: String
+    var isbn: String
     var locationID: String
     var customFields: [String: String]
     var coverData: Data?
@@ -379,8 +394,10 @@ nonisolated struct BookDraft: Equatable, Sendable {
     init(book: Book? = nil, coverData: Data? = nil, defaultLocationID: String) {
         title = book?.title ?? ""
         author = book?.author ?? ""
+        translator = book?.translator ?? ""
         publisher = book?.publisher ?? ""
         year = book?.year ?? ""
+        isbn = book?.isbn ?? ""
         locationID = book?.locationID ?? defaultLocationID
         customFields = book?.customFields ?? [:]
         self.coverData = coverData
@@ -390,8 +407,10 @@ nonisolated struct BookDraft: Equatable, Sendable {
     init(
         title: String,
         author: String,
+        translator: String = "",
         publisher: String,
         year: String,
+        isbn: String = "",
         locationID: String,
         customFields: [String: String] = [:],
         coverData: Data?,
@@ -399,8 +418,10 @@ nonisolated struct BookDraft: Equatable, Sendable {
     ) {
         self.title = title
         self.author = author
+        self.translator = translator
         self.publisher = publisher
         self.year = year
+        self.isbn = isbn
         self.locationID = locationID
         self.customFields = customFields
         self.coverData = coverData
@@ -418,14 +439,29 @@ nonisolated struct BookDraft: Equatable, Sendable {
 
             partialResult[key] = value
         }
+        var resolvedCustomFields = normalizedCustomFields
+        resolvedCustomFields.removeValue(forKey: BookInfoFieldKey.translator)
+        resolvedCustomFields.removeValue(forKey: BookInfoFieldKey.isbn)
+
+        let normalizedTranslator = translator.trimmed
+        if !normalizedTranslator.isEmpty {
+            resolvedCustomFields[BookInfoFieldKey.translator] = normalizedTranslator
+        }
+
+        let normalizedISBN = isbn.trimmed
+        if !normalizedISBN.isEmpty {
+            resolvedCustomFields[BookInfoFieldKey.isbn] = normalizedISBN
+        }
 
         return BookDraft(
             title: title.trimmed,
             author: author.trimmed,
+            translator: normalizedTranslator,
             publisher: publisher.trimmed,
             year: year.trimmed,
+            isbn: normalizedISBN,
             locationID: locationID.trimmed,
-            customFields: normalizedCustomFields,
+            customFields: resolvedCustomFields,
             coverData: coverData,
             keepsExistingCoverReference: keepsExistingCoverReference && coverData == nil
         )

@@ -35,6 +35,34 @@ final class homeLibraryUITests: XCTestCase {
     }
 
     @MainActor
+    func testCreateBookDraftRestoresAfterSwipeDismiss() throws {
+        createOwnedRepositoryIfNeeded()
+
+        app.buttons["addBookButton"].tap()
+
+        let titleField = app.textFields["titleField"]
+        XCTAssertTrue(titleField.waitForExistence(timeout: 5))
+        enterText("会被缓存的书", into: titleField)
+        enterText("作者甲", into: app.textFields["authorField"])
+        enterText("译者乙", into: app.textFields["translatorField"])
+        enterText("9787111123456", into: app.textFields["isbnField"])
+
+        dismissBookEditorBySwipe()
+        XCTAssertTrue(waitForNonExistence(of: titleField, timeout: 5))
+
+        app.buttons["addBookButton"].tap()
+
+        let reopenedTitleField = app.textFields["titleField"]
+        XCTAssertTrue(reopenedTitleField.waitForExistence(timeout: 5))
+        XCTAssertEqual(reopenedTitleField.value as? String, "会被缓存的书")
+        XCTAssertEqual(app.textFields["authorField"].value as? String, "作者甲")
+        XCTAssertEqual(app.textFields["translatorField"].value as? String, "译者乙")
+        XCTAssertEqual(app.textFields["isbnField"].value as? String, "9787111123456")
+
+        app.buttons["cancelBookButton"].tap()
+    }
+
+    @MainActor
     func testRepositorySettingsShowsBookSortAndManagementOptions() throws {
         createOwnedRepositoryIfNeeded()
         openRepositorySettings()
@@ -94,7 +122,14 @@ final class homeLibraryUITests: XCTestCase {
         XCTAssertTrue(waitForNonExistence(of: firstBookCard, timeout: 5))
     }
 
-    private func addBook(title: String, author: String, publisher: String, year: String) {
+    private func addBook(
+        title: String,
+        author: String,
+        translator: String = "",
+        publisher: String,
+        year: String,
+        isbn: String = ""
+    ) {
         app.buttons["addBookButton"].tap()
 
         let titleField = app.textFields["titleField"]
@@ -102,8 +137,14 @@ final class homeLibraryUITests: XCTestCase {
         enterText(title, into: titleField)
 
         enterText(author, into: app.textFields["authorField"])
+        if !translator.isEmpty {
+            enterText(translator, into: app.textFields["translatorField"])
+        }
         enterText(publisher, into: app.textFields["publisherField"])
         enterText(year, into: app.textFields["yearField"])
+        if !isbn.isEmpty {
+            enterText(isbn, into: app.textFields["isbnField"])
+        }
 
         app.buttons["saveBookButton"].tap()
     }
@@ -122,6 +163,12 @@ final class homeLibraryUITests: XCTestCase {
         XCTAssertTrue(settingsButton.waitForExistence(timeout: 5))
         settingsButton.tap()
         XCTAssertTrue(app.buttons["repositorySettingsCloseButton"].waitForExistence(timeout: 5))
+    }
+
+    private func dismissBookEditorBySwipe() {
+        let navigationBar = app.navigationBars["添加新书"].firstMatch
+        XCTAssertTrue(navigationBar.waitForExistence(timeout: 5))
+        navigationBar.swipeDown()
     }
 
     private func replaceText(in element: XCUIElement, with value: String) {
@@ -174,12 +221,15 @@ final class homeLibraryUITests: XCTestCase {
     }
 
     private func scrollToElement(_ element: XCUIElement, maxSwipes: Int = 6) {
-        XCTAssertTrue(element.waitForExistence(timeout: 5))
+        for _ in 0..<maxSwipes {
+            if element.exists && element.isHittable {
+                return
+            }
 
-        for _ in 0..<maxSwipes where !element.isHittable {
             app.swipeUp()
         }
 
+        XCTAssertTrue(element.waitForExistence(timeout: 5))
         XCTAssertTrue(element.isHittable)
     }
 

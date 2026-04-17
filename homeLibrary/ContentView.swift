@@ -13,6 +13,7 @@ struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var editorTarget: EditorTarget?
+    @State private var createDraftCache: CreateBookDraftCache?
     @State private var isShowingRepositorySheet = false
     @State private var libraryContentWidth: CGFloat = 0
 
@@ -37,14 +38,28 @@ struct ContentView: View {
             BookEditorView(
                 editingBook: target.book,
                 initialCoverData: target.initialCoverData,
+                initialDraft: target.initialDraft,
                 locations: store.locations.isEmpty ? LibraryLocation.defaultLocations() : store.locations,
                 defaultLocationID: target.defaultLocationID,
                 onDelete: { book in
                     await store.deleteBook(book)
-                }
-            ) { draft, book in
-                await store.saveBook(draft: draft, editing: book)
-            }
+                },
+                onSave: { draft, book in
+                    let didSave = await store.saveBook(draft: draft, editing: book)
+
+                    if didSave && target.isCreating {
+                        createDraftCache = nil
+                    }
+
+                    return didSave
+                },
+                onDraftChange: target.isCreating ? { draft in
+                    cacheCreateDraft(draft)
+                } : nil,
+                onCancel: target.isCreating ? {
+                    createDraftCache = nil
+                } : nil
+            )
         }
         .alert("提示", isPresented: alertBinding) {
             Button("知道了", role: .cancel) {
@@ -173,7 +188,7 @@ struct ContentView: View {
             TextField(
                 "",
                 text: $store.searchText,
-                prompt: Text("搜索书名、作者或 ISBN")
+                prompt: Text("搜索书名、作者、译者或 ISBN")
                     .foregroundStyle(LibraryTheme.secondaryText)
             )
             .textFieldStyle(.plain)
@@ -347,7 +362,10 @@ struct ContentView: View {
             foreground: .white,
             stroke: LibraryTheme.accent
         ) {
-            editorTarget = .create(defaultLocationID: store.defaultLocationID)
+            editorTarget = .create(
+                initialDraft: currentCreateDraft(),
+                defaultLocationID: store.defaultLocationID
+            )
         }
         .accessibilityLabel("添加")
         .disabled(!store.hasRepository)
@@ -482,6 +500,23 @@ struct ContentView: View {
             CGFloat(fallbackColumnCount) * LibraryBookGridLayout.minimumCardWidth +
             CGFloat(fallbackColumnCount - 1) * LibraryBookGridLayout.columnSpacing
         return max(libraryContentWidth, fallbackWidth)
+    }
+
+    private func cacheCreateDraft(_ draft: BookDraft) {
+        guard let repositoryID = store.currentRepository?.id else {
+            return
+        }
+
+        createDraftCache = CreateBookDraftCache(repositoryID: repositoryID, draft: draft)
+    }
+
+    private func currentCreateDraft() -> BookDraft? {
+        guard let repositoryID = store.currentRepository?.id,
+              createDraftCache?.repositoryID == repositoryID else {
+            return nil
+        }
+
+        return createDraftCache?.draft
     }
 }
 private struct SyncStatusText: View {
@@ -720,7 +755,7 @@ private enum CoverThumbnailRenderer {
 }
 
 private enum EditorTarget: Identifiable {
-    case create(defaultLocationID: String)
+    case create(initialDraft: BookDraft?, defaultLocationID: String)
     case edit(Book, initialCoverData: Data?, defaultLocationID: String)
 
     var id: String {
@@ -748,14 +783,35 @@ private enum EditorTarget: Identifiable {
         return nil
     }
 
+    var initialDraft: BookDraft? {
+        if case .create(let initialDraft, _) = self {
+            return initialDraft
+        }
+
+        return nil
+    }
+
     var defaultLocationID: String {
         switch self {
-        case .create(let defaultLocationID):
+        case .create(_, let defaultLocationID):
             return defaultLocationID
         case .edit(_, _, let defaultLocationID):
             return defaultLocationID
         }
     }
+
+    var isCreating: Bool {
+        if case .create = self {
+            return true
+        }
+
+        return false
+    }
+}
+
+private struct CreateBookDraftCache {
+    let repositoryID: String
+    let draft: BookDraft
 }
 
 private extension LibraryStore {

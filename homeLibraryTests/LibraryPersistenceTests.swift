@@ -125,7 +125,11 @@ final class LibraryPersistenceTests: XCTestCase {
                 publisher: "自有出版社",
                 year: "2026",
                 locationID: "location.study",
-                customFields: ["备注": "带封面"],
+                customFields: [
+                    "备注": "带封面",
+                    BookInfoFieldKey.translator: "张静",
+                    BookInfoFieldKey.isbn: "9787111123456"
+                ],
                 createdAt: Date(timeIntervalSince1970: 10),
                 updatedAt: Date(timeIntervalSince1970: 20)
             ),
@@ -140,6 +144,8 @@ final class LibraryPersistenceTests: XCTestCase {
         XCTAssertEqual(package.books.count, 1)
         XCTAssertEqual(package.books.first?.locationID, "location.study")
         XCTAssertEqual(package.books.first?.locationName, "书房")
+        XCTAssertEqual(package.books.first?.customFields[BookInfoFieldKey.translator], "张静")
+        XCTAssertEqual(package.books.first?.isbn, "9787111123456")
         XCTAssertEqual(package.books.first?.coverData, Data("embedded-cover".utf8))
         XCTAssertEqual(package.books.first?.id, storedBook.id)
     }

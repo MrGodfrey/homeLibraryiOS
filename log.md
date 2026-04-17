@@ -319,3 +319,16 @@
 ### 验证记录
 
 - `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'generic/platform=iOS Simulator' build` 通过
+
+## 2026-04-17（新增页草稿缓存、译者与 ISBN）
+
+- 调整新增书籍页状态管理：把新增模式的 `BookDraft` 提升到父视图缓存，误滑关闭 sheet 后再次点“添加新书”会恢复未保存输入；右上角“取消”仍按显式放弃处理，会清空这份新增草稿。
+- 扩展图书信息录入项：新增正式的“译者”和“ISBN”输入框，其中译者放在作者下方；保存时两项会和现有 `customFields` 兼容映射，不影响旧数据读取。
+- 调整首页搜索文案与 README：搜索提示、功能说明和数据模型说明已同步更新为“书名、作者、译者或 ISBN”，并补充新增页草稿缓存的当前行为。
+- 补充自动化测试：新增 `BookDraft` 映射单测、扩展导出包单测校验译者与 ISBN，并新增 UI 测试覆盖“误滑关闭新增页后恢复草稿”；同时修正旧删除流程 UI 测试在编辑页变长后的滚动查找。
+
+### 验证记录
+
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryTests -only-testing:homeLibraryUITests test` 通过
+- `homeLibraryTests.xctest` 共执行 `47` 个测试，其中 `1` 个 CloudKit live 测试按预期跳过，其余全部通过
+- `homeLibraryUITests.xctest` 共执行 `8` 个测试，全部通过
