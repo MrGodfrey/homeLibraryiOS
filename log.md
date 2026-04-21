@@ -346,3 +346,13 @@
 - `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' test` 通过
 - `homeLibraryTests.xctest` 共执行 `48` 个测试，其中 `1` 个 CloudKit live 测试按预期跳过，其余全部通过
 - `homeLibraryUITests.xctest` 共执行 `8` 个测试，全部通过
+
+## 2026-04-21（新增 MIT 开源许可证）
+
+- 新增根目录 `LICENSE`，采用标准 `MIT License`，允许任何人自由使用、修改、分发和商用本项目。
+- 在 `README.md` 末尾追加“开源许可”章节，明确当前仓库的许可方式，以及商用和再分发时需保留版权声明与许可证全文。
+- 本次只涉及许可证与文档说明，不改动应用代码、配置或测试入口。
+
+### 验证记录
+
+- `git status --short` 已确认改动范围仅包含 `LICENSE`、`README.md` 和 `log.md`
