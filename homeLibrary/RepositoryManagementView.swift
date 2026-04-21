@@ -48,7 +48,7 @@ struct RepositoryManagementView: View {
             .libraryFormChrome()
             .listSectionSpacing(18)
             .tint(LibraryTheme.accent)
-            .navigationTitle("仓库设置")
+            .navigationTitle(localized("仓库设置", en: "Library Settings"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbarBackground(LibraryTheme.background, for: .navigationBar)
@@ -59,26 +59,26 @@ struct RepositoryManagementView: View {
             ) { result in
                 handleLegacyImportSelection(result)
             }
-            .confirmationDialog("确认清空当前仓库？", isPresented: $isShowingClearConfirmation, titleVisibility: .visible) {
-                Button("清空", role: .destructive) {
+            .confirmationDialog(localized("确认清空当前仓库？", en: "Clear the current library?"), isPresented: $isShowingClearConfirmation, titleVisibility: .visible) {
+                Button(localized("清空", en: "Clear"), role: .destructive) {
                     Task {
                         _ = await store.clearCurrentRepository()
                     }
                 }
 
-                Button("取消", role: .cancel) {}
+                Button(localized("取消", en: "Cancel"), role: .cancel) {}
             } message: {
-                Text("书籍和地点配置都会重置，当前仓库的缓存也会一起刷新。")
+                Text(localized("书籍和地点配置都会重置，当前仓库的缓存也会一起刷新。", en: "Books, location settings, and the local cache for this library will all be reset."))
             }
-            .alert("确认整理当前仓库封面？", isPresented: $isShowingCoverCompressionConfirmation) {
-                Button("取消", role: .cancel) {}
-                Button("确认整理", role: .destructive) {
+            .alert(localized("确认整理当前仓库封面？", en: "Optimize covers in the current library?"), isPresented: $isShowingCoverCompressionConfirmation) {
+                Button(localized("取消", en: "Cancel"), role: .cancel) {}
+                Button(localized("确认整理", en: "Optimize"), role: .destructive) {
                     Task {
                         _ = await store.compressOversizedCoversInCurrentRepository()
                     }
                 }
             } message: {
-                Text("此操作会替换所有的封面。")
+                Text(localized("此操作会替换所有的封面。", en: "This action will replace every cover image."))
             }
             .sheet(item: $activitySheetItem) { item in
                 ActivityView(activityItems: [item.url])
@@ -97,7 +97,7 @@ struct RepositoryManagementView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭") {
+                    Button(localized("关闭", en: "Close")) {
                         Task {
                             guard await persistLocationChangesIfNeeded() else {
                                 return
@@ -124,18 +124,18 @@ struct RepositoryManagementView: View {
                         .font(.headline)
                         .foregroundStyle(LibraryTheme.title)
 
-                    LabeledContent("角色", value: store.repositoryRoleTitle)
-                    LabeledContent("数据库", value: store.repositoryScopeTitle)
-                    LabeledContent("共享状态", value: store.shareStatusTitle)
+                    LabeledContent(localized("角色", en: "Role"), value: store.repositoryRoleTitle)
+                    LabeledContent(localized("数据库", en: "Database"), value: store.repositoryScopeTitle)
+                    LabeledContent(localized("共享状态", en: "Sharing"), value: store.shareStatusTitle)
                 }
                 .padding(.vertical, 4)
             } else {
-                Text("当前设备还没有可访问的家庭书库。")
+                Text(localized("当前设备还没有可访问的家庭书库。", en: "There is no accessible family library on this device yet."))
                     .foregroundStyle(LibraryTheme.secondaryText)
             }
         }
         header: {
-            sectionHeader("当前仓库")
+            sectionHeader(localized("当前仓库", en: "Current Library"))
         }
         .listRowBackground(LibraryTheme.surface)
     }
@@ -143,7 +143,7 @@ struct RepositoryManagementView: View {
     private var sortingSection: some View {
         Section {
             Picker(
-                "图书排序方式",
+                localized("图书排序方式", en: "Book Sort Order"),
                 selection: Binding(
                     get: { store.bookSortOrder },
                     set: { store.setBookSortOrder($0) }
@@ -158,7 +158,7 @@ struct RepositoryManagementView: View {
             .accessibilityIdentifier("bookSortPicker")
         }
         header: {
-            sectionHeader("图书排序")
+            sectionHeader(localized("图书排序", en: "Book Sorting"))
         }
         .listRowBackground(LibraryTheme.surface)
     }
@@ -166,7 +166,7 @@ struct RepositoryManagementView: View {
     private var repositoriesSection: some View {
         Section {
             if store.availableRepositories.isEmpty {
-                Text("还没有发现任何可访问仓库。")
+                Text(localized("还没有发现任何可访问仓库。", en: "No accessible libraries have been found yet."))
                     .foregroundStyle(LibraryTheme.secondaryText)
             } else {
                 ForEach(store.availableRepositories) { repository in
@@ -184,7 +184,7 @@ struct RepositoryManagementView: View {
                     }
                 } label: {
                     formActionLabel(
-                        title: store.isCreatingRepository ? "创建中..." : "创建我的仓库",
+                        title: store.isCreatingRepository ? localized("创建中...", en: "Creating...") : localized("创建我的仓库", en: "Create My Library"),
                         systemName: "books.vertical",
                         tint: LibraryTheme.accent
                     )
@@ -195,14 +195,14 @@ struct RepositoryManagementView: View {
             }
         }
         header: {
-            sectionHeader("可访问的仓库")
+            sectionHeader(localized("可访问的仓库", en: "Accessible Libraries"))
         }
         .listRowBackground(LibraryTheme.surface)
     }
 
     private var createRepositorySection: some View {
         Section {
-            Text("创建后即可开始录入书籍，并通过系统共享邀请家人加入。")
+            Text(localized("创建后即可开始录入书籍，并通过系统共享邀请家人加入。", en: "Once created, you can start adding books and invite family members with system sharing."))
                 .font(.footnote)
                 .foregroundStyle(LibraryTheme.secondaryText)
 
@@ -218,7 +218,7 @@ struct RepositoryManagementView: View {
                 }
             } label: {
                 formActionLabel(
-                    title: store.isCreatingRepository ? "创建中..." : "创建我的仓库",
+                    title: store.isCreatingRepository ? localized("创建中...", en: "Creating...") : localized("创建我的仓库", en: "Create My Library"),
                     systemName: "books.vertical",
                     tint: LibraryTheme.accent
                 )
@@ -228,7 +228,7 @@ struct RepositoryManagementView: View {
             .accessibilityIdentifier("createOwnedRepositoryButton")
         }
         header: {
-            sectionHeader("创建我的仓库")
+            sectionHeader(localized("创建我的仓库", en: "Create My Library"))
         }
         .listRowBackground(LibraryTheme.surface)
     }
@@ -243,7 +243,7 @@ struct RepositoryManagementView: View {
                             Button(role: .destructive) {
                                 removeLocation(location.id)
                             } label: {
-                                Label("删除", systemImage: "trash")
+                                Label(localized("删除", en: "Delete"), systemImage: "trash")
                             }
                         }
                     }
@@ -253,15 +253,15 @@ struct RepositoryManagementView: View {
             Button {
                 addLocation()
             } label: {
-                formActionLabel(title: "新增地点", systemName: "plus", tint: LibraryTheme.accent)
+                formActionLabel(title: localized("新增地点", en: "Add Location"), systemName: "plus", tint: LibraryTheme.accent)
             }
             .buttonStyle(RepositoryManagementActionButtonStyle())
             .accessibilityIdentifier("addLocationButton")
         }
         header: {
-            sectionHeader("地点配置")
+            sectionHeader(localized("地点配置", en: "Location Settings"))
         } footer: {
-            Text("拖动右侧把手调整顺序，修改后会自动保存。")
+            Text(localized("拖动右侧把手调整顺序，修改后会自动保存。", en: "Drag the handle on the right to reorder. Changes save automatically."))
         }
         .listRowBackground(LibraryTheme.surface)
         .environment(\.editMode, .constant(.active))
@@ -270,7 +270,7 @@ struct RepositoryManagementView: View {
     private var sharingSection: some View {
         Section {
             if store.canManageSharing {
-                Text("通过系统共享把这座家庭书库发给家人，加入和权限管理都交给 Apple ID 完成。")
+                Text(localized("通过系统共享把这座家庭书库发给家人，加入和权限管理都交给 Apple ID 完成。", en: "Share this family library with the system share flow. Joining and permissions are handled through Apple ID."))
                     .font(.footnote)
                     .foregroundStyle(LibraryTheme.secondaryText)
 
@@ -279,18 +279,18 @@ struct RepositoryManagementView: View {
                         await openSharingController()
                     }
                 } label: {
-                    formActionLabel(title: "邀请家人加入", systemName: "person.crop.circle.badge.plus", tint: LibraryTheme.accent)
+                    formActionLabel(title: localized("邀请家人加入", en: "Invite Family Members"), systemName: "person.crop.circle.badge.plus", tint: LibraryTheme.accent)
                 }
                 .buttonStyle(RepositoryManagementActionButtonStyle())
             }
 
             if store.canAcceptShareLinks {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("如果系统邀请没有自动打开共享仓库，可以把 iCloud 共享链接粘贴到这里手动处理。首先，你需要在“邀请家人加入”中通过 Message（最好是通过 iMessage）发送邀请，这样才能够打开这个仓库，否则这个仓库会显示不存在。")
+                    Text(localized("如果系统邀请没有自动打开共享仓库，可以把 iCloud 共享链接粘贴到这里手动处理。首先，你需要在“邀请家人加入”中通过 Message（最好是通过 iMessage）发送邀请，这样才能够打开这个仓库，否则这个仓库会显示不存在。", en: "If the system invite does not open the shared library automatically, paste the iCloud share link here to handle it manually. First send the invitation from “Invite Family Members” through Messages, preferably iMessage, or the library may appear unavailable."))
                         .font(.footnote)
                         .foregroundStyle(LibraryTheme.secondaryText)
 
-                    TextField("https://www.icloud.com/share/...", text: $incomingShareLink, axis: .vertical)
+                    TextField(localized("https://www.icloud.com/share/...", en: "https://www.icloud.com/share/..."), text: $incomingShareLink, axis: .vertical)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .font(.footnote.monospaced())
@@ -312,14 +312,14 @@ struct RepositoryManagementView: View {
                             ProgressView()
                                 .tint(LibraryTheme.accent)
 
-                            Text("正在处理共享链接…")
+                            Text(localized("正在处理共享链接…", en: "Processing share link..."))
                                 .font(.footnote.weight(.semibold))
                                 .foregroundStyle(LibraryTheme.bodyText)
                         }
                     }
 
                     HStack(spacing: 12) {
-                        Button("粘贴剪贴板") {
+                        Button(localized("粘贴剪贴板", en: "Paste from Clipboard")) {
                             pasteShareLinkFromClipboard()
                         }
                         .disabled(store.isAcceptingShareLink)
@@ -333,7 +333,7 @@ struct RepositoryManagementView: View {
                                 }
                             }
                         } label: {
-                            Text(store.isAcceptingShareLink ? "处理中..." : "打开共享仓库")
+                            Text(store.isAcceptingShareLink ? localized("处理中...", en: "Processing...") : localized("打开共享仓库", en: "Open Shared Library"))
                                 .font(.system(size: 15, weight: .semibold))
                                 .frame(maxWidth: .infinity)
                         }
@@ -346,7 +346,7 @@ struct RepositoryManagementView: View {
             }
         }
         header: {
-            sectionHeader("共享")
+            sectionHeader(localized("共享", en: "Sharing"))
         }
         .listRowBackground(LibraryTheme.surface)
     }
@@ -365,7 +365,9 @@ struct RepositoryManagementView: View {
                 isShowingCoverCompressionConfirmation = true
             } label: {
                 formActionLabel(
-                    title: store.isCompressingCovers ? "整理中..." : "整理当前仓库封面",
+                    title: store.isCompressingCovers ?
+                        localized("整理中...", en: "Optimizing...") :
+                        localized("整理当前仓库封面", en: "Optimize Current Library Covers"),
                     systemName: "arrow.triangle.2.circlepath",
                     tint: LibraryTheme.accent
                 )
@@ -378,7 +380,7 @@ struct RepositoryManagementView: View {
                 isShowingLegacyImportPicker = true
             } label: {
                 formActionLabel(
-                    title: store.isImportingLegacyData ? "导入中..." : "迁移旧数据 JSON",
+                    title: store.isImportingLegacyData ? localized("导入中...", en: "Importing...") : localized("迁移旧数据 JSON", en: "Import Legacy JSON"),
                     systemName: "square.and.arrow.down",
                     tint: LibraryTheme.accent
                 )
@@ -395,7 +397,7 @@ struct RepositoryManagementView: View {
                 }
             } label: {
                 formActionLabel(
-                    title: store.isExportingRepository ? "导出中..." : "导出当前仓库 ZIP",
+                    title: store.isExportingRepository ? localized("导出中...", en: "Exporting...") : localized("导出当前仓库 ZIP", en: "Export Current Library ZIP"),
                     systemName: "square.and.arrow.up",
                     tint: LibraryTheme.accent
                 )
@@ -408,7 +410,7 @@ struct RepositoryManagementView: View {
                 isShowingClearConfirmation = true
             } label: {
                 formActionLabel(
-                    title: "清空当前仓库",
+                    title: localized("清空当前仓库", en: "Clear Current Library"),
                     systemName: "trash",
                     tint: LibraryTheme.destructive,
                     textColor: LibraryTheme.destructive
@@ -418,7 +420,7 @@ struct RepositoryManagementView: View {
             .accessibilityIdentifier("clearRepositoryButton")
         }
         header: {
-            sectionHeader("高级管理")
+            sectionHeader(localized("高级管理", en: "Advanced Management"))
         }
         .listRowBackground(LibraryTheme.surface)
     }
@@ -438,11 +440,11 @@ struct RepositoryManagementView: View {
                 .ignoresSafeArea()
 
             VStack(alignment: .leading, spacing: 14) {
-                Text("正在导出当前仓库")
+                Text(localized("正在导出当前仓库", en: "Exporting Current Library"))
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(LibraryTheme.title)
 
-                Text("请稍候，导出完成后会自动打开系统共享。")
+                Text(localized("请稍候，导出完成后会自动打开系统共享。", en: "Please wait. The system share sheet will open automatically when export finishes."))
                     .font(.footnote)
                     .foregroundStyle(LibraryTheme.secondaryText)
 
@@ -488,14 +490,14 @@ struct RepositoryManagementView: View {
                 Spacer()
 
                 if store.isCurrentRepository(repository) {
-                    Text("当前")
+                    Text(localized("当前", en: "Current"))
                         .font(.caption.weight(.bold))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
                         .foregroundStyle(LibraryTheme.bodyText)
                         .background(LibraryTheme.surfaceSecondary, in: Capsule())
                 } else {
-                    Button("切换") {
+                    Button(localized("切换", en: "Switch")) {
                         Task {
                             guard await persistLocationChangesIfNeeded() else {
                                 return
@@ -520,7 +522,7 @@ struct RepositoryManagementView: View {
                         _ = await store.removeRepository(repository)
                     }
                 } label: {
-                    Label("删除", systemImage: "trash")
+                    Label(localized("删除", en: "Delete"), systemImage: "trash")
                 }
             }
         }
@@ -552,7 +554,7 @@ struct RepositoryManagementView: View {
             return
         }
 
-        store.alertMessage = "剪贴板里没有可用的共享链接。"
+        store.alertMessage = localized("剪贴板里没有可用的共享链接。", en: "There is no usable share link on the clipboard.")
     }
 
     private func syncDraftLocations() {
@@ -562,10 +564,10 @@ struct RepositoryManagementView: View {
     private func locationRow(for location: LibraryLocation) -> some View {
         let locationBinding = draftLocationBinding(for: location)
         return VStack(alignment: .leading, spacing: 10) {
-            TextField("地点名称", text: locationBinding.name)
+            TextField(localized("地点名称", en: "Location Name"), text: locationBinding.name)
                 .accessibilityIdentifier("locationNameField-\(location.id)")
 
-            Toggle("显示在首页筛选中", isOn: locationBinding.isVisible)
+            Toggle(localized("显示在首页筛选中", en: "Show in Home Filters"), isOn: locationBinding.isVisible)
                 .font(.footnote)
                 .accessibilityIdentifier("locationVisibilityToggle-\(location.id)")
         }
@@ -597,7 +599,7 @@ struct RepositoryManagementView: View {
             .map { index, location in
                 LibraryLocation(
                     id: location.id,
-                    name: location.name.trimmed.nilIfEmpty ?? "地点 \(index + 1)",
+                    name: location.name.trimmed.nilIfEmpty ?? localized("地点 %d", en: "Location %d", arguments: [index + 1]),
                     sortOrder: index,
                     isVisible: location.isVisible
                 )
@@ -607,7 +609,7 @@ struct RepositoryManagementView: View {
     private func addLocation() {
         draftLocations.append(
             LibraryLocation(
-                name: "新地点 \(draftLocations.count + 1)",
+                name: localized("新地点 %d", en: "New Location %d", arguments: [draftLocations.count + 1]),
                 sortOrder: draftLocations.count
             )
         )

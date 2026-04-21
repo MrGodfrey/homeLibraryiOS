@@ -7,6 +7,100 @@
 
 import Foundation
 
+enum LibraryLanguage: String, Sendable {
+    case simplifiedChinese = "zh-Hans"
+    case english = "en"
+}
+
+enum LibraryLocalization {
+    nonisolated(unsafe) static var overrideLanguage: LibraryLanguage?
+
+    static var currentLanguage: LibraryLanguage {
+        if let overrideLanguage {
+            return overrideLanguage
+        }
+
+        return resolvedLanguage()
+    }
+
+    static func text(_ chinese: String, en english: String) -> String {
+        switch currentLanguage {
+        case .simplifiedChinese:
+            return chinese
+        case .english:
+            return english
+        }
+    }
+
+    static func format(_ chinese: String, en english: String, arguments: [CVarArg]) -> String {
+        String(
+            format: text(chinese, en: english),
+            locale: locale(for: currentLanguage),
+            arguments: arguments
+        )
+    }
+
+    private static func resolvedLanguage(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        userDefaults: UserDefaults = .standard,
+        locale: Locale = .autoupdatingCurrent
+    ) -> LibraryLanguage {
+        if let configuredLanguage = environment["HOME_LIBRARY_LOCALE"],
+           let language = language(for: configuredLanguage) {
+            return language
+        }
+
+        if environment["XCTestConfigurationFilePath"] != nil {
+            return .simplifiedChinese
+        }
+
+        let preferredLanguages = userDefaults.stringArray(forKey: "AppleLanguages") ?? Locale.preferredLanguages
+        for identifier in preferredLanguages {
+            if let language = language(for: identifier) {
+                return language
+            }
+        }
+
+        return language(for: locale.identifier) ?? .simplifiedChinese
+    }
+
+    private static func language(for rawValue: String) -> LibraryLanguage? {
+        let normalized = rawValue
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "_", with: "-")
+            .lowercased()
+
+        if normalized.hasPrefix("en") {
+            return .english
+        }
+
+        if normalized.hasPrefix("zh") {
+            return .simplifiedChinese
+        }
+
+        return nil
+    }
+
+    private static func locale(for language: LibraryLanguage) -> Locale {
+        switch language {
+        case .simplifiedChinese:
+            return Locale(identifier: "zh_Hans_CN")
+        case .english:
+            return Locale(identifier: "en_US")
+        }
+    }
+}
+
+@inline(__always)
+func localized(_ chinese: String, en english: String) -> String {
+    LibraryLocalization.text(chinese, en: english)
+}
+
+@inline(__always)
+func localized(_ chinese: String, en english: String, arguments: [CVarArg]) -> String {
+    LibraryLocalization.format(chinese, en: english, arguments: arguments)
+}
+
 nonisolated enum RepositoryRole: String, Codable, Sendable {
     case owner
     case member
@@ -14,9 +108,9 @@ nonisolated enum RepositoryRole: String, Codable, Sendable {
     var title: String {
         switch self {
         case .owner:
-            return "我的仓库"
+            return localized("我的仓库", en: "My Library")
         case .member:
-            return "共享仓库"
+            return localized("共享仓库", en: "Shared Library")
         }
     }
 }
@@ -28,9 +122,9 @@ nonisolated enum CloudDatabaseScope: String, Codable, Sendable {
     var title: String {
         switch self {
         case .private:
-            return "私人数据库"
+            return localized("私人数据库", en: "Private Database")
         case .shared:
-            return "共享数据库"
+            return localized("共享数据库", en: "Shared Database")
         }
     }
 }
@@ -42,9 +136,9 @@ nonisolated enum RepositoryShareStatus: String, Codable, Sendable {
     var title: String {
         switch self {
         case .notShared:
-            return "尚未共享"
+            return localized("尚未共享", en: "Not Shared")
         case .shared:
-            return "已开启共享"
+            return localized("已开启共享", en: "Shared")
         }
     }
 }
@@ -62,13 +156,16 @@ nonisolated struct LibraryRepositoryReference: Identifiable, Equatable, Codable,
     var subtitle: String {
         switch (role, databaseScope) {
         case (.owner, .private):
-            return "书库保存在你的 iCloud 私人数据库中，可通过系统共享邀请家人加入。"
+            return localized(
+                "书库保存在你的 iCloud 私人数据库中，可通过系统共享邀请家人加入。",
+                en: "This library is stored in your private iCloud database. You can invite family members with system sharing."
+            )
         case (.member, .shared):
-            return "这是别人共享给你的家庭书库。"
+            return localized("这是别人共享给你的家庭书库。", en: "This family library was shared with you by someone else.")
         case (.owner, .shared):
-            return "你正在查看一座已共享的书库。"
+            return localized("你正在查看一座已共享的书库。", en: "You are viewing a library that has already been shared.")
         case (.member, .private):
-            return "这是当前设备保存的私人仓库。"
+            return localized("这是当前设备保存的私人仓库。", en: "This is a private library stored on the current device.")
         }
     }
 
@@ -158,11 +255,11 @@ nonisolated struct RepositoryImportProgress: Equatable, Sendable {
     var statusText: String {
         switch phase {
         case .counting:
-            return "正在统计导入内容..."
+            return localized("正在统计导入内容...", en: "Counting import items...")
         case .importing:
-            return "已导入 \(importedCount) / \(totalCount)"
+            return localized("已导入 %d / %d", en: "Imported %d / %d", arguments: [importedCount, totalCount])
         case .completed:
-            return "导入完成，共 \(totalCount) 本"
+            return localized("导入完成，共 %d 本", en: "Import complete, %d books", arguments: [totalCount])
         }
     }
 }
@@ -191,15 +288,19 @@ nonisolated struct RepositoryExportProgress: Equatable, Sendable {
     var statusText: String {
         switch phase {
         case .preparing:
-            return "正在读取当前仓库内容..."
+            return localized("正在读取当前仓库内容...", en: "Reading current library...")
         case .encoding:
             if let bookCount {
-                return "正在整理 \(bookCount) 本书与封面..."
+                return localized(
+                    "正在整理 %d 本书与封面...",
+                    en: "Preparing %d books and covers...",
+                    arguments: [bookCount]
+                )
             }
 
-            return "正在整理导出内容..."
+            return localized("正在整理导出内容...", en: "Preparing export...")
         case .archiving:
-            return "正在生成 ZIP 文件..."
+            return localized("正在生成 ZIP 文件...", en: "Creating ZIP archive...")
         }
     }
 }

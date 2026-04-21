@@ -332,3 +332,17 @@
 - `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryTests -only-testing:homeLibraryUITests test` 通过
 - `homeLibraryTests.xctest` 共执行 `47` 个测试，其中 `1` 个 CloudKit live 测试按预期跳过，其余全部通过
 - `homeLibraryUITests.xctest` 共执行 `8` 个测试，全部通过
+
+## 2026-04-21（新增英文界面支持）
+
+- 为应用新增中英文双语支持：首页、编辑页、仓库设置、同步状态、导入导出进度、错误提示等内置文案现在会跟随系统或应用当前语言切换。
+- 调整默认地点初始化：新建书库时的默认地点名称会按当前语言生成；同时保留对历史中文地点名的兼容，并补上对英文默认地点名的归一化识别。
+- 稳定测试环境语言：单元测试默认固定中文，新增英文输出单测；UI 测试显式注入中文语言环境，并把“下拉关闭新增页”改成更稳定的拖拽手势。
+- 同步更新 `README.md`，补充当前双语界面行为，并更新最新测试数量。
+
+### 验证记录
+
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryUITests/homeLibraryUITests/testCreateBookDraftRestoresAfterSwipeDismiss test` 通过
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' test` 通过
+- `homeLibraryTests.xctest` 共执行 `48` 个测试，其中 `1` 个 CloudKit live 测试按预期跳过，其余全部通过
+- `homeLibraryUITests.xctest` 共执行 `8` 个测试，全部通过

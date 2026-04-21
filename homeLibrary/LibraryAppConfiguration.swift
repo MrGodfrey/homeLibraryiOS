@@ -62,7 +62,7 @@ struct LibraryAppConfiguration {
         let preferredOwnedRepositoryName = environment["HOME_LIBRARY_PREFERRED_REPOSITORY_NAME"]?.nilIfEmpty ??
             bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ??
             bundle.object(forInfoDictionaryKey: "CFBundleName") as? String ??
-            "我的家庭书库"
+            localized("我的家庭书库", en: "My Home Library")
         return LibraryAppConfiguration(
             cacheStore: LibraryCacheStore(rootURL: storageRootURL.appendingPathComponent("cloudkit-cache", isDirectory: true)),
             legacyImporter: LegacyLibraryImporter(storageRootURL: storageRootURL),

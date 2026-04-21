@@ -15,6 +15,7 @@ final class homeLibraryUITests: XCTestCase {
         app = XCUIApplication()
         app.launchEnvironment["HOME_LIBRARY_STORAGE_NAMESPACE"] = "ui-tests-\(UUID().uuidString)"
         app.launchEnvironment["HOME_LIBRARY_REMOTE_DRIVER"] = "memory"
+        app.launchEnvironment["HOME_LIBRARY_LOCALE"] = "zh-Hans"
         XCUIDevice.shared.orientation = .portrait
         app.launch()
     }
@@ -168,7 +169,16 @@ final class homeLibraryUITests: XCTestCase {
     private func dismissBookEditorBySwipe() {
         let navigationBar = app.navigationBars["添加新书"].firstMatch
         XCTAssertTrue(navigationBar.waitForExistence(timeout: 5))
-        navigationBar.swipeDown()
+
+        let start = navigationBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.88))
+        start.press(forDuration: 0.05, thenDragTo: end)
+
+        if app.textFields["titleField"].exists {
+            let retryStart = navigationBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+            let retryEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.96))
+            retryStart.press(forDuration: 0.05, thenDragTo: retryEnd)
+        }
     }
 
     private func replaceText(in element: XCUIElement, with value: String) {

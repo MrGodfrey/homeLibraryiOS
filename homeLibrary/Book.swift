@@ -35,8 +35,8 @@ nonisolated struct LibraryLocation: Identifiable, Hashable, Codable, Sendable {
 
     nonisolated static func defaultLocations() -> [LibraryLocation] {
         [
-            LibraryLocation(id: "location.chengdu", name: "成都", sortOrder: 0),
-            LibraryLocation(id: "location.chongqing", name: "重庆", sortOrder: 1)
+            LibraryLocation(id: "location.chengdu", name: localized("成都", en: "Chengdu"), sortOrder: 0),
+            LibraryLocation(id: "location.chongqing", name: localized("重庆", en: "Chongqing"), sortOrder: 1)
         ]
     }
 }
@@ -46,7 +46,7 @@ nonisolated struct LibraryLocationFilter: Identifiable, Hashable, Sendable {
     let title: String
     let locationID: String?
 
-    nonisolated static let all = LibraryLocationFilter(id: "all", title: "全部", locationID: nil)
+    nonisolated static let all = LibraryLocationFilter(id: "all", title: localized("全部", en: "All"), locationID: nil)
 
     nonisolated init(id: String, title: String, locationID: String?) {
         self.id = id
@@ -137,10 +137,10 @@ nonisolated struct BookPayload: Hashable, Codable, Sendable {
     }
 
     nonisolated static func makeLocationID(fromLegacyName name: String) -> String {
-        switch name {
-        case "成都":
+        switch name.trimmed.lowercased() {
+        case "成都", "chengdu":
             return "location.chengdu"
-        case "重庆":
+        case "重庆", "chongqing":
             return "location.chongqing"
         default:
             return "location.legacy.\(name.trimmed.nilIfEmpty ?? "unknown")"
@@ -273,7 +273,7 @@ nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
     }
 
     var displayAuthor: String {
-        author.trimmed.isEmpty ? "未知作者" : author
+        author.trimmed.isEmpty ? localized("未知作者", en: "Unknown Author") : author
     }
 
     var translator: String {
@@ -285,7 +285,7 @@ nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
     }
 
     var displayPublisherLine: String {
-        let publisherText = publisher.trimmed.isEmpty ? "未填写出版社" : publisher
+        let publisherText = publisher.trimmed.isEmpty ? localized("未填写出版社", en: "Publisher not set") : publisher
 
         if year.trimmed.isEmpty {
             return publisherText
@@ -295,7 +295,7 @@ nonisolated struct Book: Identifiable, Hashable, Codable, Sendable {
     }
 
     func locationName(in locationsByID: [String: LibraryLocation]) -> String {
-        locationsByID[locationID]?.name ?? "未分配地点"
+        locationsByID[locationID]?.name ?? localized("未分配地点", en: "Unassigned location")
     }
 
     func searchCorpus(locationName: String) -> String {
@@ -372,7 +372,7 @@ nonisolated struct LegacyBook: Hashable, Decodable, Sendable {
         isbn = try container.decodeIfPresent(String.self, forKey: .isbn) ?? ""
         let decodedLocationName = try container.decodeIfPresent(String.self, forKey: .locationName)
         let decodedLegacyLocation = try container.decodeIfPresent(String.self, forKey: .location)
-        locationName = decodedLocationName ?? decodedLegacyLocation ?? "未分配地点"
+        locationName = decodedLocationName ?? decodedLegacyLocation ?? localized("未分配地点", en: "Unassigned location")
         coverData = try container.decodeIfPresent(Data.self, forKey: .coverData)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
@@ -505,13 +505,13 @@ nonisolated enum LibraryBookSortOrder: String, CaseIterable, Identifiable, Codab
     var title: String {
         switch self {
         case .author:
-            return "按作者首字母排序"
+            return localized("按作者首字母排序", en: "Sort by author")
         case .title:
-            return "按标题首字母排序"
+            return localized("按标题首字母排序", en: "Sort by title")
         case .createdAt:
-            return "按添加时间排序"
+            return localized("按添加时间排序", en: "Sort by date added")
         case .updatedAt:
-            return "按修改时间排序"
+            return localized("按修改时间排序", en: "Sort by date modified")
         }
     }
 

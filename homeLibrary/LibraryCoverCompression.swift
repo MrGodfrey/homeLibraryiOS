@@ -39,9 +39,17 @@ nonisolated struct RepositoryCoverCompressionProgress: Equatable, Sendable {
     var statusText: String {
         switch phase {
         case .running:
-            return "已处理 \(processedCount) / \(totalCount)，已压缩 \(compressedCount) 张图片"
+            return localized(
+                "已处理 %d / %d，已压缩 %d 张图片",
+                en: "Processed %d / %d, compressed %d images",
+                arguments: [processedCount, totalCount, compressedCount]
+            )
         case .completed:
-            return "整理完成，已压缩 \(compressedCount) / \(totalCount) 张图片"
+            return localized(
+                "整理完成，已压缩 %d / %d 张图片",
+                en: "Optimization complete, compressed %d / %d images",
+                arguments: [compressedCount, totalCount]
+            )
         }
     }
 }

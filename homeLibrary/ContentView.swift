@@ -61,8 +61,8 @@ struct ContentView: View {
                 } : nil
             )
         }
-        .alert("提示", isPresented: alertBinding) {
-            Button("知道了", role: .cancel) {
+        .alert(localized("提示", en: "Notice"), isPresented: alertBinding) {
+            Button(localized("知道了", en: "OK"), role: .cancel) {
                 store.alertMessage = nil
             }
         } message: {
@@ -111,7 +111,7 @@ struct ContentView: View {
     private var headerIntro: some View {
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("家藏万卷")
+                Text(localized("家藏万卷", en: "Home Library"))
                     .font(.system(size: 30, weight: .bold))
                     .foregroundStyle(LibraryTheme.title)
                     .lineLimit(1)
@@ -188,7 +188,7 @@ struct ContentView: View {
             TextField(
                 "",
                 text: $store.searchText,
-                prompt: Text("搜索书名、作者、译者或 ISBN")
+                prompt: Text(localized("搜索书名、作者、译者或 ISBN", en: "Search by title, author, translator, or ISBN"))
                     .foregroundStyle(LibraryTheme.secondaryText)
             )
             .textFieldStyle(.plain)
@@ -253,7 +253,7 @@ struct ContentView: View {
 
     private var librarySection: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("共 \(store.visibleBooks.count) 本")
+            Text(localized("共 %d 本", en: "%d books", arguments: [store.visibleBooks.count]))
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(LibraryTheme.secondaryText)
 
@@ -314,7 +314,7 @@ struct ContentView: View {
             ProgressView()
                 .tint(LibraryTheme.accent)
 
-            Text("正在读取书库…")
+            Text(localized("正在读取书库…", en: "Loading library..."))
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(LibraryTheme.bodyText)
         }
@@ -333,11 +333,19 @@ struct ContentView: View {
                         .foregroundStyle(LibraryTheme.accent)
                 }
 
-            Text(hasActiveFilters ? "当前没有匹配的书籍" : "仓库还是空的")
+            Text(
+                hasActiveFilters ?
+                    localized("当前没有匹配的书籍", en: "No matching books") :
+                    localized("仓库还是空的", en: "Library is empty")
+            )
                 .font(.system(size: 22, weight: .bold))
                 .foregroundStyle(LibraryTheme.title)
 
-            Text(hasActiveFilters ? "试试切换地点或清空搜索。" : "点右上角的加号，先录入第一本书。")
+            Text(
+                hasActiveFilters ?
+                    localized("试试切换地点或清空搜索。", en: "Try switching locations or clearing the search.") :
+                    localized("点右上角的加号，先录入第一本书。", en: "Tap the plus button in the top-right to add your first book.")
+            )
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(LibraryTheme.secondaryText)
                 .multilineTextAlignment(.center)
@@ -367,7 +375,7 @@ struct ContentView: View {
                 defaultLocationID: store.defaultLocationID
             )
         }
-        .accessibilityLabel("添加")
+        .accessibilityLabel(localized("添加", en: "Add"))
         .disabled(!store.hasRepository)
     }
 
@@ -388,7 +396,7 @@ struct ContentView: View {
             Spacer()
 
             if progress.phase == .completed {
-                Button("关闭") {
+                Button(localized("关闭", en: "Close")) {
                     store.dismissImportProgress()
                 }
                 .font(.system(size: 14, weight: .semibold))
@@ -410,17 +418,17 @@ struct ContentView: View {
         VStack(spacing: 20) {
             Spacer()
 
-            Text("家藏万卷")
+            Text(localized("家藏万卷", en: "Home Library"))
                 .font(.system(size: 34, weight: .bold))
                 .foregroundStyle(LibraryTheme.title)
 
-            Text("先创建一座家庭书库，再开始录入和共享。")
+            Text(localized("先创建一座家庭书库，再开始录入和共享。", en: "Create a family library first, then start adding and sharing books."))
                 .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(LibraryTheme.secondaryText)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 28)
 
-            Button(store.isCreatingRepository ? "创建中..." : "创建我的仓库") {
+            Button(store.isCreatingRepository ? localized("创建中...", en: "Creating...") : localized("创建我的仓库", en: "Create My Library")) {
                 Task {
                     _ = await store.createOwnedRepository()
                 }
@@ -437,7 +445,7 @@ struct ContentView: View {
             .padding(.horizontal, 24)
             .accessibilityIdentifier("createOwnedRepositoryButton")
 
-            Button("设置") {
+            Button(localized("设置", en: "Settings")) {
                 isShowingRepositorySheet = true
             }
             .buttonStyle(.plain)
@@ -465,11 +473,13 @@ struct ContentView: View {
 
     private var repositorySummary: String {
         if let currentRepository = store.currentRepository {
-            let shareSummary = currentRepository.shareStatus == .shared ? "已共享" : "未共享"
+            let shareSummary = currentRepository.shareStatus == .shared ?
+                localized("已共享", en: "Shared") :
+                localized("未共享", en: "Not Shared")
             return "\(currentRepository.role.title) / \(shareSummary)"
         }
 
-        return "当前设备还没有可访问的家庭书库。"
+        return localized("当前设备还没有可访问的家庭书库。", en: "There is no accessible family library on this device yet.")
     }
 
     private var alertBinding: Binding<Bool> {
@@ -548,13 +558,13 @@ private extension LibrarySyncStatus {
     var inlineLabel: String {
         switch self {
         case .idle:
-            return "未同步"
+            return localized("未同步", en: "Not Synced")
         case .syncing:
-            return "同步中"
+            return localized("同步中", en: "Syncing")
         case .upToDate:
-            return "已同步"
+            return localized("已同步", en: "Synced")
         case .failed:
-            return "同步失败"
+            return localized("同步失败", en: "Sync Failed")
         }
     }
 }

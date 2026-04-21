@@ -23,6 +23,7 @@ final class homeLibraryUITestsLaunchTests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["HOME_LIBRARY_STORAGE_NAMESPACE"] = "launch-tests-\(UUID().uuidString)"
         app.launchEnvironment["HOME_LIBRARY_REMOTE_DRIVER"] = "memory"
+        app.launchEnvironment["HOME_LIBRARY_LOCALE"] = "zh-Hans"
         app.launch()
 
         let createRepositoryButton = app.buttons["createOwnedRepositoryButton"].firstMatch

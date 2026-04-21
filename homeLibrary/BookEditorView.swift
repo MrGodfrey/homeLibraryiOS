@@ -66,13 +66,13 @@ struct BookEditorView: View {
             .libraryFormChrome()
             .listSectionSpacing(18)
             .tint(LibraryTheme.accent)
-            .navigationTitle(editingBook == nil ? "添加新书" : "编辑书籍")
+            .navigationTitle(editingBook == nil ? localized("添加新书", en: "Add Book") : localized("编辑书籍", en: "Edit Book"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbarBackground(LibraryTheme.background, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") {
+                    Button(localized("取消", en: "Cancel")) {
                         onCancel?()
                         dismiss()
                     }
@@ -82,7 +82,9 @@ struct BookEditorView: View {
 
                 ToolbarItem(placement: .confirmationAction) {
                     Button(
-                        isSaving ? "保存中..." : (editingBook == nil ? "确认添加" : "保存修改")
+                        isSaving ?
+                            localized("保存中...", en: "Saving...") :
+                            (editingBook == nil ? localized("确认添加", en: "Add") : localized("保存修改", en: "Save Changes"))
                     ) {
                         Task {
                             await saveBook()
@@ -127,24 +129,24 @@ struct BookEditorView: View {
 
     private var informationSection: some View {
         Section {
-            TextField("书名", text: $draft.title)
+            TextField(localized("书名", en: "Title"), text: $draft.title)
                 .accessibilityIdentifier("titleField")
-            TextField("作者", text: $draft.author)
+            TextField(localized("作者", en: "Author"), text: $draft.author)
                 .accessibilityIdentifier("authorField")
-            TextField("译者", text: $draft.translator)
+            TextField(localized("译者", en: "Translator"), text: $draft.translator)
                 .accessibilityIdentifier("translatorField")
-            TextField("出版社", text: $draft.publisher)
+            TextField(localized("出版社", en: "Publisher"), text: $draft.publisher)
                 .accessibilityIdentifier("publisherField")
-            TextField("出版年份", text: $draft.year)
+            TextField(localized("出版年份", en: "Publication Year"), text: $draft.year)
                 .keyboardType(.numbersAndPunctuation)
                 .accessibilityIdentifier("yearField")
-            TextField("ISBN", text: $draft.isbn)
+            TextField(localized("ISBN", en: "ISBN"), text: $draft.isbn)
                 .keyboardType(.asciiCapable)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .accessibilityIdentifier("isbnField")
 
-            Picker("所在地点", selection: locationSelection) {
+            Picker(localized("所在地点", en: "Location"), selection: locationSelection) {
                 ForEach(locations) { location in
                     Text(location.name).tag(location.id)
                 }
@@ -152,7 +154,7 @@ struct BookEditorView: View {
             .accessibilityIdentifier("editorLocationPicker")
         }
         header: {
-            sectionHeader("图书信息")
+            sectionHeader(localized("图书信息", en: "Book Details"))
         }
         .listRowBackground(LibraryTheme.surface)
     }
@@ -165,7 +167,9 @@ struct BookEditorView: View {
 
             PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
                 formActionLabel(
-                    title: draft.coverData == nil && !draft.keepsExistingCoverReference ? "从 iPhone 上传封面" : "更换封面",
+                    title: draft.coverData == nil && !draft.keepsExistingCoverReference ?
+                        localized("从 iPhone 上传封面", en: "Upload Cover from iPhone") :
+                        localized("更换封面", en: "Replace Cover"),
                     systemName: "photo",
                     tint: LibraryTheme.accent
                 )
@@ -180,7 +184,7 @@ struct BookEditorView: View {
                     draft.keepsExistingCoverReference = false
                 } label: {
                     formActionLabel(
-                        title: "移除封面",
+                        title: localized("移除封面", en: "Remove Cover"),
                         systemName: "trash",
                         tint: LibraryTheme.destructive,
                         textColor: LibraryTheme.destructive
@@ -195,7 +199,7 @@ struct BookEditorView: View {
                     ProgressView()
                         .tint(LibraryTheme.accent)
 
-                    Text("正在压缩封面…")
+                    Text(localized("正在压缩封面…", en: "Compressing cover..."))
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(LibraryTheme.bodyText)
                 }
@@ -203,7 +207,7 @@ struct BookEditorView: View {
             }
         }
         header: {
-            sectionHeader("封面")
+            sectionHeader(localized("封面", en: "Cover"))
         }
         .listRowBackground(LibraryTheme.surface)
     }
@@ -214,7 +218,7 @@ struct BookEditorView: View {
                 activeAlert = .deleteConfirmation
             } label: {
                 formActionLabel(
-                    title: "删除书籍",
+                    title: localized("删除书籍", en: "Delete Book"),
                     systemName: "trash",
                     tint: LibraryTheme.destructive,
                     textColor: LibraryTheme.destructive
@@ -223,7 +227,7 @@ struct BookEditorView: View {
             .disabled(isSaving || isDeleting)
             .accessibilityIdentifier("deleteBookButton")
         } header: {
-            sectionHeader("危险操作")
+            sectionHeader(localized("危险操作", en: "Destructive Actions"))
         }
         .listRowBackground(LibraryTheme.surface)
     }
@@ -278,7 +282,7 @@ struct BookEditorView: View {
 
         do {
             guard let data = try await item.loadTransferable(type: Data.self) else {
-                activeAlert = .message("读取封面失败，请换一张图片重试。")
+                activeAlert = .message(localized("读取封面失败，请换一张图片重试。", en: "Failed to read the cover. Try a different image."))
                 return
             }
 
@@ -293,7 +297,7 @@ struct BookEditorView: View {
             draft.coverData = compressionResult.data
             draft.keepsExistingCoverReference = false
         } catch {
-            activeAlert = .message("读取封面失败，请换一张图片重试。")
+            activeAlert = .message(localized("读取封面失败，请换一张图片重试。", en: "Failed to read the cover. Try a different image."))
         }
     }
 
@@ -329,20 +333,20 @@ struct BookEditorView: View {
         switch alert {
         case .message(let message):
             return Alert(
-                title: Text("提示"),
+                title: Text(localized("提示", en: "Notice")),
                 message: Text(message),
-                dismissButton: .cancel(Text("知道了"))
+                dismissButton: .cancel(Text(localized("知道了", en: "OK")))
             )
         case .deleteConfirmation:
             return Alert(
-                title: Text("确认删除这本书？"),
-                message: Text("删除后会立即写入当前仓库。"),
-                primaryButton: .destructive(Text("确认删除")) {
+                title: Text(localized("确认删除这本书？", en: "Delete this book?")),
+                message: Text(localized("删除后会立即写入当前仓库。", en: "The deletion will be saved to the current library immediately.")),
+                primaryButton: .destructive(Text(localized("确认删除", en: "Delete"))) {
                     Task {
                         await deleteBook()
                     }
                 },
-                secondaryButton: .cancel(Text("暂不删除"))
+                secondaryButton: .cancel(Text(localized("暂不删除", en: "Not Now")))
             )
         }
     }
@@ -381,7 +385,7 @@ private struct BookCoverPreview: View {
                     Image(systemName: "book.closed")
                         .font(.system(size: 28))
                         .foregroundStyle(LibraryTheme.accent)
-                    Text(title.trimmed.isEmpty ? "未设置封面" : title)
+                    Text(title.trimmed.isEmpty ? localized("未设置封面", en: "No Cover") : title)
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(LibraryTheme.secondaryText)
                         .lineLimit(3)

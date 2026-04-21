@@ -134,23 +134,23 @@ final class LibraryStore: ObservableObject {
     }
 
     var repositoryTitle: String {
-        currentRepository?.name ?? "还没有仓库"
+        currentRepository?.name ?? localized("还没有仓库", en: "No Library Yet")
     }
 
     var repositorySubtitle: String {
-        currentRepository?.subtitle ?? "当前设备还没有可访问的家庭书库。"
+        currentRepository?.subtitle ?? localized("当前设备还没有可访问的家庭书库。", en: "There is no accessible family library on this device yet.")
     }
 
     var repositoryRoleTitle: String {
-        currentRepository?.role.title ?? "未连接"
+        currentRepository?.role.title ?? localized("未连接", en: "Not Connected")
     }
 
     var repositoryScopeTitle: String {
-        currentRepository?.databaseScope.title ?? "未连接"
+        currentRepository?.databaseScope.title ?? localized("未连接", en: "Not Connected")
     }
 
     var shareStatusTitle: String {
-        currentRepository?.shareStatus.title ?? "未共享"
+        currentRepository?.shareStatus.title ?? localized("未共享", en: "Not Shared")
     }
 
     var visibleLocationFilters: [LibraryLocationFilter] {
@@ -261,7 +261,7 @@ final class LibraryStore: ObservableObject {
     @discardableResult
     func saveLocations(_ draftLocations: [LibraryLocation]) async -> Bool {
         guard let repository = currentRepository else {
-            alertMessage = "当前还没有可写入的仓库。"
+            alertMessage = localized("当前还没有可写入的仓库。", en: "There is no writable library yet.")
             return false
         }
 
@@ -290,12 +290,12 @@ final class LibraryStore: ObservableObject {
         let normalizedDraft = draft.normalized
 
         guard normalizedDraft.canSave else {
-            alertMessage = "书名和地点不能为空。"
+            alertMessage = localized("书名和地点不能为空。", en: "Title and location are required.")
             return false
         }
 
         guard let repository = currentRepository else {
-            alertMessage = "请先创建或切换到一个仓库。"
+            alertMessage = localized("请先创建或切换到一个仓库。", en: "Create or switch to a library first.")
             return false
         }
 
@@ -336,7 +336,7 @@ final class LibraryStore: ObservableObject {
     @discardableResult
     func deleteBook(_ book: Book) async -> Bool {
         guard let repository = currentRepository else {
-            alertMessage = "当前还没有可写入的仓库。"
+            alertMessage = localized("当前还没有可写入的仓库。", en: "There is no writable library yet.")
             return false
         }
 
@@ -426,7 +426,7 @@ final class LibraryStore: ObservableObject {
 
             guard totalCount > 0 else {
                 importProgress = nil
-                alertMessage = "选中的 JSON 没有可导入的书籍。"
+                alertMessage = localized("选中的 JSON 没有可导入的书籍。", en: "The selected JSON does not contain any books to import.")
                 return false
             }
 
@@ -447,7 +447,7 @@ final class LibraryStore: ObservableObject {
             importProgress = RepositoryImportProgress(phase: .completed, totalCount: totalCount, importedCount: totalCount)
             sessionStore.markLegacyMigrationCompleted(for: repository.id)
             try await refreshFromCloud(repository: repository)
-            alertMessage = "已完成导入，共 \(totalCount) 本。"
+            alertMessage = localized("已完成导入，共 %d 本。", en: "Import complete, %d books.", arguments: [totalCount])
             return true
         } catch {
             importProgress = nil
@@ -461,7 +461,7 @@ final class LibraryStore: ObservableObject {
     @discardableResult
     func compressOversizedCoversInCurrentRepository() async -> Bool {
         guard let repository = currentRepository else {
-            alertMessage = "当前还没有仓库。"
+            alertMessage = localized("当前还没有仓库。", en: "There is no library yet.")
             return false
         }
 
@@ -491,7 +491,7 @@ final class LibraryStore: ObservableObject {
         let assetIDs = booksByAssetID.keys.sorted()
         guard !assetIDs.isEmpty else {
             coverCompressionProgress = nil
-            alertMessage = "当前仓库没有可整理的封面。"
+            alertMessage = localized("当前仓库没有可整理的封面。", en: "There are no covers to optimize in the current library.")
             return false
         }
 
@@ -547,8 +547,16 @@ final class LibraryStore: ObservableObject {
             )
             syncStatus = .upToDate(finishedAt)
             alertMessage = compressedCount == 0 ?
-                "已检查 \(assetIDs.count) 张封面，没有需要压缩的图片。" :
-                "当前仓库整理完成，已压缩 \(compressedCount) 张封面图片。"
+                localized(
+                    "已检查 %d 张封面，没有需要压缩的图片。",
+                    en: "Checked %d covers. None needed compression.",
+                    arguments: [assetIDs.count]
+                ) :
+                localized(
+                    "当前仓库整理完成，已压缩 %d 张封面图片。",
+                    en: "Current library optimized. %d covers were compressed.",
+                    arguments: [compressedCount]
+                )
             return true
         } catch {
             coverCompressionProgress = nil
@@ -562,7 +570,7 @@ final class LibraryStore: ObservableObject {
     @discardableResult
     func clearCurrentRepository() async -> Bool {
         guard let repository = currentRepository else {
-            alertMessage = "当前还没有仓库。"
+            alertMessage = localized("当前还没有仓库。", en: "There is no library yet.")
             return false
         }
 
@@ -570,7 +578,7 @@ final class LibraryStore: ObservableObject {
             let resetLocations = LibraryLocation.defaultLocations()
             try await remoteService.clearRepository(repository, resetLocations: resetLocations)
             try await refreshFromCloud(repository: repository)
-            alertMessage = "当前仓库已经清空。"
+            alertMessage = localized("当前仓库已经清空。", en: "The current library has been cleared.")
             return true
         } catch {
             let message = Self.userFacingMessage(for: error)
@@ -583,7 +591,7 @@ final class LibraryStore: ObservableObject {
     @discardableResult
     func exportCurrentRepository() async -> URL? {
         guard let repository = currentRepository else {
-            alertMessage = "当前还没有仓库。"
+            alertMessage = localized("当前还没有仓库。", en: "There is no library yet.")
             return nil
         }
 
@@ -632,12 +640,12 @@ final class LibraryStore: ObservableObject {
     @discardableResult
     func removeRepository(_ repository: LibraryRepositoryReference) async -> Bool {
         guard availableRepositories.count > 1 else {
-            alertMessage = "至少保留一个可访问的仓库。"
+            alertMessage = localized("至少保留一个可访问的仓库。", en: "Keep at least one accessible library.")
             return false
         }
 
         guard !isCurrentRepository(repository) else {
-            alertMessage = "不能删除当前正在使用的仓库。"
+            alertMessage = localized("不能删除当前正在使用的仓库。", en: "You can't delete the library currently in use.")
             return false
         }
 
@@ -672,12 +680,12 @@ final class LibraryStore: ObservableObject {
     @discardableResult
     func acceptShareLink(_ rawValue: String) async -> Bool {
         guard let service = remoteService as? any LibraryShareLinkAccepting else {
-            alertMessage = "当前配置不支持通过链接加入共享仓库。"
+            alertMessage = localized("当前配置不支持通过链接加入共享仓库。", en: "This configuration does not support joining shared libraries by link.")
             return false
         }
 
         guard let url = Self.shareURL(from: rawValue) else {
-            alertMessage = "请输入有效的 iCloud 共享链接。"
+            alertMessage = localized("请输入有效的 iCloud 共享链接。", en: "Enter a valid iCloud share link.")
             return false
         }
 
@@ -697,9 +705,9 @@ final class LibraryStore: ObservableObject {
             )
 
             if let repository = currentRepository {
-                alertMessage = "已打开共享仓库：\(repository.name)"
+                alertMessage = localized("已打开共享仓库：%@", en: "Opened shared library: %@", arguments: [repository.name])
             } else {
-                alertMessage = "已接受共享邀请。"
+                alertMessage = localized("已接受共享邀请。", en: "Accepted the share invitation.")
             }
 
             return true
@@ -740,7 +748,7 @@ final class LibraryStore: ObservableObject {
             return localizedDescription
         }
 
-        return "发生了未预期的错误。"
+        return localized("发生了未预期的错误。", en: "An unexpected error occurred.")
     }
 
     private var locationsByID: [String: LibraryLocation] {
@@ -970,7 +978,7 @@ final class LibraryStore: ObservableObject {
             .map { index, location in
                 LibraryLocation(
                     id: location.id.trimmed.nilIfEmpty ?? UUID().uuidString,
-                    name: location.name.trimmed.nilIfEmpty ?? "地点 \(index + 1)",
+                    name: location.name.trimmed.nilIfEmpty ?? localized("地点 %d", en: "Location %d", arguments: [index + 1]),
                     sortOrder: index,
                     isVisible: location.isVisible
                 )

@@ -377,6 +377,24 @@ final class homeLibraryTests: XCTestCase {
         XCTAssertEqual(message, "CloudKit 网络连接失败，请确认 iPhone 已联网并关闭代理或 VPN 后重试。")
     }
 
+    func testLocalizationSupportsEnglishStrings() {
+        let previousLanguage = LibraryLocalization.overrideLanguage
+        LibraryLocalization.overrideLanguage = .english
+        defer { LibraryLocalization.overrideLanguage = previousLanguage }
+
+        XCTAssertEqual(LibraryLocation.defaultLocations().map(\.name), ["Chengdu", "Chongqing"])
+        XCTAssertEqual(RepositoryRole.owner.title, "My Library")
+        XCTAssertEqual(LibraryBookSortOrder.author.title, "Sort by author")
+        XCTAssertEqual(
+            LibraryStore.userFacingMessage(for: LibraryRemoteServiceError.networkUnavailable),
+            "CloudKit network access failed. Make sure your iPhone is online and any proxy or VPN is disabled, then try again."
+        )
+        XCTAssertEqual(
+            RepositoryImportProgress(phase: .completed, totalCount: 12, importedCount: 12).statusText,
+            "Import complete, 12 books"
+        )
+    }
+
     func testPreferredRepositoryAfterAcceptUsesSharedZoneMatch() {
         let ownerRepository = LibraryRepositoryReference(
             id: "library.owner",

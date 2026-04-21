@@ -20,13 +20,17 @@ nonisolated enum LibrarySyncStatus: Equatable {
     var label: String {
         switch self {
         case .idle:
-            return "等待同步"
+            return localized("等待同步", en: "Waiting to sync")
         case .syncing:
-            return "同步中"
+            return localized("同步中", en: "Syncing")
         case .upToDate(let date):
-            return "已同步 \(Self.relativeFormatter.localizedString(for: date, relativeTo: .now))"
+            return localized(
+                "已同步 %@",
+                en: "Synced %@",
+                arguments: [Self.relativeFormatter.localizedString(for: date, relativeTo: .now)]
+            )
         case .failed:
-            return "同步失败"
+            return localized("同步失败", en: "Sync failed")
         }
     }
 
@@ -92,35 +96,64 @@ enum LibraryRemoteServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .repositoryNotFound:
-            return "没有找到对应的家庭书库。"
+            return localized("没有找到对应的家庭书库。", en: "The requested family library could not be found.")
         case .shareNotAvailable:
-            return "当前书库还没有可用的共享。"
+            return localized("当前书库还没有可用的共享。", en: "The current library does not have a share available yet.")
         case .noCloudAccount:
-            return "当前设备没有可用的 iCloud 账号，无法连接 CloudKit。"
+            return localized(
+                "当前设备没有可用的 iCloud 账号，无法连接 CloudKit。",
+                en: "No iCloud account is available on this device, so CloudKit can't connect."
+            )
         case .permissionDenied:
-            return "当前账号没有权限执行这个操作。"
+            return localized("当前账号没有权限执行这个操作。", en: "The current account does not have permission to perform this action.")
         case .invalidCloudRecord:
-            return "CloudKit 中的数据格式无法识别，请检查远端记录。"
+            return localized(
+                "CloudKit 中的数据格式无法识别，请检查远端记录。",
+                en: "The data format in CloudKit could not be recognized. Check the remote records."
+            )
         case .networkUnavailable:
-            return "CloudKit 网络连接失败，请确认 iPhone 已联网并关闭代理或 VPN 后重试。"
+            return localized(
+                "CloudKit 网络连接失败，请确认 iPhone 已联网并关闭代理或 VPN 后重试。",
+                en: "CloudKit network access failed. Make sure your iPhone is online and any proxy or VPN is disabled, then try again."
+            )
         case .serviceUnavailable(let retryAfter):
             if let retryAfter, retryAfter > 0 {
-                return "CloudKit 当前繁忙，请在 \(Int(retryAfter.rounded(.up))) 秒后重试。"
+                return localized(
+                    "CloudKit 当前繁忙，请在 %d 秒后重试。",
+                    en: "CloudKit is busy. Try again in %d seconds.",
+                    arguments: [Int(retryAfter.rounded(.up))]
+                )
             }
 
-            return "CloudKit 当前不可用，请稍后再试。"
+            return localized("CloudKit 当前不可用，请稍后再试。", en: "CloudKit is currently unavailable. Please try again later.")
         case .accountTemporarilyUnavailable:
-            return "当前 iCloud 账号暂时不可用于 CloudKit，请稍后重试。"
+            return localized(
+                "当前 iCloud 账号暂时不可用于 CloudKit，请稍后重试。",
+                en: "The current iCloud account is temporarily unavailable for CloudKit. Please try again later."
+            )
         case .invalidContainerConfiguration:
-            return "CloudKit 容器配置无效，请检查 App ID、Bundle ID 和 iCloud 容器设置。"
+            return localized(
+                "CloudKit 容器配置无效，请检查 App ID、Bundle ID 和 iCloud 容器设置。",
+                en: "The CloudKit container configuration is invalid. Check the App ID, Bundle ID, and iCloud container settings."
+            )
         case .missingEntitlement:
-            return "应用缺少 CloudKit 权限，请检查签名和 iCloud capability 配置。"
+            return localized(
+                "应用缺少 CloudKit 权限，请检查签名和 iCloud capability 配置。",
+                en: "The app is missing the CloudKit entitlement. Check signing and the iCloud capability configuration."
+            )
         case .missingQueryableIndex(let field):
             if let field, !field.isEmpty {
-                return "CloudKit schema 缺少 QUERYABLE 索引：\(field)。请在 CloudKit Dashboard 的 Schema 里为该字段添加 QUERYABLE。"
+                return localized(
+                    "CloudKit schema 缺少 QUERYABLE 索引：%@。请在 CloudKit Dashboard 的 Schema 里为该字段添加 QUERYABLE。",
+                    en: "The CloudKit schema is missing a QUERYABLE index for %@. Add it in the CloudKit Dashboard schema.",
+                    arguments: [field]
+                )
             }
 
-            return "CloudKit schema 缺少 QUERYABLE 索引。请在 CloudKit Dashboard 的 Schema 里为相关字段添加 QUERYABLE。"
+            return localized(
+                "CloudKit schema 缺少 QUERYABLE 索引。请在 CloudKit Dashboard 的 Schema 里为相关字段添加 QUERYABLE。",
+                en: "The CloudKit schema is missing a QUERYABLE index. Add it for the relevant fields in the CloudKit Dashboard schema."
+            )
         case .unknown(let message):
             return message
         }
@@ -728,7 +761,9 @@ final class CloudKitLibraryService: NSObject, LibraryRemoteSyncing {
             case .noAccount:
                 throw LibraryRemoteServiceError.noCloudAccount
             default:
-                throw LibraryRemoteServiceError.unknown("当前 CloudKit 不可用，请稍后再试。")
+                throw LibraryRemoteServiceError.unknown(
+                    localized("当前 CloudKit 不可用，请稍后再试。", en: "CloudKit is currently unavailable. Please try again later.")
+                )
             }
         } catch {
             throw mapCloudError(error)
