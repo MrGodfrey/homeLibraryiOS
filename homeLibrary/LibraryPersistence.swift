@@ -59,17 +59,19 @@ enum LibraryJSONCodec {
 }
 
 nonisolated struct LibraryCacheManifest: Codable, Equatable, Sendable {
-    nonisolated static let currentSchemaVersion = 2
+    nonisolated static let currentSchemaVersion = 3
 
     var schemaVersion: Int
     var repositoryID: String
     var lastSuccessfulSyncAt: Date?
+    var cloudKitZoneChangeTokenData: Data?
 
     nonisolated static func makeNew(repositoryID: String) -> LibraryCacheManifest {
         LibraryCacheManifest(
             schemaVersion: currentSchemaVersion,
             repositoryID: repositoryID,
-            lastSuccessfulSyncAt: nil
+            lastSuccessfulSyncAt: nil,
+            cloudKitZoneChangeTokenData: nil
         )
     }
 }
@@ -401,7 +403,9 @@ nonisolated struct LibraryCacheStore: Sendable {
         locations: [LibraryLocation],
         coverDataByAssetID: [String: Data],
         repositoryID: String,
-        synchronizedAt: Date?
+        synchronizedAt: Date?,
+        cloudKitChangeTokenData: Data? = nil,
+        updatesCloudKitChangeToken: Bool = false
     ) throws {
         try prepareForUse(repositoryID: repositoryID)
 
@@ -419,6 +423,55 @@ nonisolated struct LibraryCacheStore: Sendable {
 
         try mutateManifest(for: repositoryID) { manifest in
             manifest.lastSuccessfulSyncAt = synchronizedAt
+            if updatesCloudKitChangeToken {
+                manifest.cloudKitZoneChangeTokenData = cloudKitChangeTokenData
+            }
+        }
+        try garbageCollectAssets(repositoryID: repositoryID)
+    }
+
+    nonisolated func applyRemoteChanges(
+        upsertingBooks books: [Book],
+        deletingBookIDs deletedBookIDs: [String],
+        upsertingLocations locations: [LibraryLocation],
+        deletingLocationIDs deletedLocationIDs: [String],
+        coverDataByAssetID: [String: Data],
+        repositoryID: String,
+        synchronizedAt: Date?,
+        cloudKitChangeTokenData: Data?
+    ) throws {
+        try prepareForUse(repositoryID: repositoryID)
+
+        for bookID in deletedBookIDs {
+            try removeItemIfPresent(at: bookRecordURL(for: bookID, repositoryID: repositoryID))
+        }
+
+        for book in books {
+            if let assetID = book.coverAssetID, let data = coverDataByAssetID[assetID] {
+                _ = try writeCoverAsset(data, preferredAssetID: assetID, repositoryID: repositoryID)
+            }
+
+            let data = try LibraryJSONCodec.makeEncoder().encode(book)
+            try data.write(to: bookRecordURL(for: book.id, repositoryID: repositoryID), options: [.atomic])
+        }
+
+        if !locations.isEmpty || !deletedLocationIDs.isEmpty {
+            var locationsByID = Dictionary(uniqueKeysWithValues: try loadLocations(repositoryID: repositoryID).map { ($0.id, $0) })
+
+            for locationID in deletedLocationIDs {
+                locationsByID[locationID] = nil
+            }
+
+            for location in locations {
+                locationsByID[location.id] = location
+            }
+
+            try saveLocations(Array(locationsByID.values), repositoryID: repositoryID)
+        }
+
+        try mutateManifest(for: repositoryID) { manifest in
+            manifest.lastSuccessfulSyncAt = synchronizedAt
+            manifest.cloudKitZoneChangeTokenData = cloudKitChangeTokenData
         }
         try garbageCollectAssets(repositoryID: repositoryID)
     }
@@ -487,6 +540,11 @@ nonisolated struct LibraryCacheStore: Sendable {
         try mutateManifest(for: repositoryID) { manifest in
             manifest.lastSuccessfulSyncAt = date
         }
+    }
+
+    nonisolated func cloudKitChangeTokenData(repositoryID: String) throws -> Data? {
+        try prepareForUse(repositoryID: repositoryID)
+        return try readManifest(for: repositoryID)?.cloudKitZoneChangeTokenData
     }
 
     nonisolated func clearRepository(_ repositoryID: String) throws {

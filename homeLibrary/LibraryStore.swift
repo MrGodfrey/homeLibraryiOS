@@ -842,6 +842,12 @@ final class LibraryStore: ObservableObject {
 
     private func refreshFromCloud(repository: LibraryRepositoryReference) async throws {
         syncStatus = .syncing
+
+        if let incrementalService = remoteService as? any LibraryRemoteIncrementalSyncing {
+            try await refreshIncrementally(repository: repository, using: incrementalService)
+            return
+        }
+
         let snapshot = try await remoteService.refreshRepository(repository)
         let synchronizedAt = Date()
         try await replaceCache(
@@ -855,7 +861,9 @@ final class LibraryStore: ObservableObject {
                 partialResult[assetID] = coverData
             },
             repositoryID: snapshot.repository.id,
-            synchronizedAt: synchronizedAt
+            synchronizedAt: synchronizedAt,
+            cloudKitChangeTokenData: nil,
+            updatesCloudKitChangeToken: true
         )
 
         currentRepositoryChanged(snapshot.repository)
@@ -866,12 +874,56 @@ final class LibraryStore: ObservableObject {
         persistSessionState()
     }
 
+    private func refreshIncrementally(
+        repository: LibraryRepositoryReference,
+        using service: any LibraryRemoteIncrementalSyncing
+    ) async throws {
+        let previousChangeTokenData = try await cachedCloudKitChangeTokenData(repositoryID: repository.id)
+        let changes = try await service.refreshRepositoryChanges(repository, since: previousChangeTokenData)
+        let synchronizedAt = Date()
+        let coverDataByAssetID = changes.books.reduce(into: [String: Data]()) { partialResult, snapshot in
+            guard let assetID = snapshot.book.coverAssetID, let coverData = snapshot.coverData else {
+                return
+            }
+
+            partialResult[assetID] = coverData
+        }
+
+        if changes.isFullRefresh {
+            try await replaceCache(
+                books: changes.books.map(\.book),
+                locations: changes.locations,
+                coverDataByAssetID: coverDataByAssetID,
+                repositoryID: changes.repository.id,
+                synchronizedAt: synchronizedAt,
+                cloudKitChangeTokenData: changes.changeTokenData,
+                updatesCloudKitChangeToken: true
+            )
+        } else {
+            try await applyCacheChanges(
+                changes,
+                coverDataByAssetID: coverDataByAssetID,
+                repositoryID: changes.repository.id,
+                synchronizedAt: synchronizedAt
+            )
+        }
+
+        currentRepositoryChanged(changes.repository)
+        try await reloadFromCache(repositoryID: changes.repository.id)
+        validateSelectedLocation()
+        syncStatus = .upToDate(synchronizedAt)
+        try await refreshAvailableRepositories(selecting: changes.repository)
+        persistSessionState()
+    }
+
     private func replaceCache(
         books: [Book],
         locations: [LibraryLocation],
         coverDataByAssetID: [String: Data],
         repositoryID: String,
-        synchronizedAt: Date
+        synchronizedAt: Date,
+        cloudKitChangeTokenData: Data? = nil,
+        updatesCloudKitChangeToken: Bool = false
     ) async throws {
         let cacheStore = self.cacheStore
 
@@ -881,11 +933,44 @@ final class LibraryStore: ObservableObject {
                 locations: locations,
                 coverDataByAssetID: coverDataByAssetID,
                 repositoryID: repositoryID,
-                synchronizedAt: synchronizedAt
+                synchronizedAt: synchronizedAt,
+                cloudKitChangeTokenData: cloudKitChangeTokenData,
+                updatesCloudKitChangeToken: updatesCloudKitChangeToken
             )
         }.value
 
         coverCache.merge(coverDataByAssetID) { _, new in new }
+    }
+
+    private func applyCacheChanges(
+        _ changes: RemoteRepositoryChangeSet,
+        coverDataByAssetID: [String: Data],
+        repositoryID: String,
+        synchronizedAt: Date
+    ) async throws {
+        let cacheStore = self.cacheStore
+
+        try await Task.detached(priority: .utility) {
+            try cacheStore.applyRemoteChanges(
+                upsertingBooks: changes.books.map(\.book),
+                deletingBookIDs: changes.deletedBookIDs,
+                upsertingLocations: changes.locations,
+                deletingLocationIDs: changes.deletedLocationIDs,
+                coverDataByAssetID: coverDataByAssetID,
+                repositoryID: repositoryID,
+                synchronizedAt: synchronizedAt,
+                cloudKitChangeTokenData: changes.changeTokenData
+            )
+        }.value
+
+        coverCache.merge(coverDataByAssetID) { _, new in new }
+    }
+
+    private func cachedCloudKitChangeTokenData(repositoryID: String) async throws -> Data? {
+        let cacheStore = self.cacheStore
+        return try await Task.detached(priority: .utility) {
+            try cacheStore.cloudKitChangeTokenData(repositoryID: repositoryID)
+        }.value
     }
 
     private func writeSnapshotToCache(

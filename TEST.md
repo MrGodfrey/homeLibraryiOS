@@ -2,13 +2,15 @@
 
 ## 总览
 
-目前仓库里有 **25 个 XCTest 用例**，外加 **1 个辅助脚本**：
+目前仓库里有 **58 个 XCTest 用例/执行项**，外加 **1 个辅助脚本**：
 
-- `homeLibraryTests/homeLibraryTests.swift`：15 个单元/状态管理测试
-- `homeLibraryTests/LibraryPersistenceTests.swift`：7 个持久化与导入测试
+- `homeLibraryTests/homeLibraryTests.swift`：35 个单元/状态管理测试
+- `homeLibraryTests/LibraryPersistenceTests.swift`：9 个持久化与导入测试
 - `homeLibraryTests/CloudKitLiveIntegrationTests.swift`：1 个真实 CloudKit 集成测试
-- `homeLibraryUITests/homeLibraryUITests.swift`：1 个 UI 测试
-- `homeLibraryUITests/homeLibraryUITestsLaunchTests.swift`：1 个启动测试
+- `homeLibraryTests/LibraryCoverCompressionTests.swift`：4 个封面压缩测试
+- `homeLibraryTests/LibraryExportProgressTests.swift`：1 个导出进度测试
+- `homeLibraryUITests/homeLibraryUITests.swift`：4 个 UI 测试
+- `homeLibraryUITests/homeLibraryUITestsLaunchTests.swift`：1 个启动测试（按方向/明暗模式重复执行）
 - `scripts/run_dual_sim_cloudkit_share_test.swift`：双模拟器 CloudKit 分享验证脚本，不属于 XCTest
 
 整体上，当前测试重点在：
@@ -17,7 +19,8 @@
 2. 本地缓存持久化与导入/导出
 3. `LibraryStore` 的仓库管理流程
 4. CloudKit 配置切换
-5. 最基础的 iOS UI 主流程
+5. CloudKit 增量刷新与本地缓存合并
+6. 最基础的 iOS UI 主流程
 
 ## 1. `homeLibraryTests/homeLibraryTests.swift`
 
@@ -27,7 +30,7 @@
 
 - `testFiltersBooksByDynamicLocationAndKeyword`
   - 测试图书筛选是否同时按“动态位置 + 关键字”生效
-- `testNormalizesDraftFieldsAndCustomFieldsBeforeSave`
+- `testNormalizesDraftFieldsAndManagedBookInfoBeforeSave`
   - 测试 `BookDraft` 保存前是否会去掉首尾空格、清理空自定义字段
 - `testBookPayloadDecodesLegacyLocationIntoDynamicLocationID`
   - 测试旧格式 `location` 字段是否能转换成新的 `locationID`
@@ -62,6 +65,9 @@
   - 测试当前仓库是否能成功导出 zip 文件
 - `testStoreImportsPackageAndUpdatesProgress`
   - 测试导入 JSON 包后，是否更新进度状态并正确装载图书数据
+- `testStoreRefreshUsesCachedCloudKitChangeTokenAndMergesIncrementalChanges`
+  - 测试刷新时会携带本地保存的 CloudKit zone change token
+  - 测试增量变更只合并新增/删除内容，不会丢掉未变化的本地缓存
 
 ## 2. `homeLibraryTests/LibraryPersistenceTests.swift`
 
@@ -75,6 +81,9 @@
 - `testReplaceAllContentGarbageCollectsStaleAssetsAndPersistsLocations`
   - 测试全量替换内容时，旧封面资源是否会被清理
   - 测试位置列表是否一并持久化
+- `testApplyRemoteChangesMergesIncrementalUpdateAndPersistsChangeToken`
+  - 测试远端增量新增、删除、地点更新会正确合并到本地缓存
+  - 测试 CloudKit zone change token 会随增量刷新持久化
 - `testCacheStoreExportsImportPackageWithEmbeddedCoverData`
   - 测试导出导入包时，是否会把封面数据嵌入到导出包中
 
@@ -88,6 +97,8 @@
   - 测试从显式指定的 `LibraryImport.json` 文件导入
 - `testLegacyImporterLoadsStructuredSeedFileWithoutLocationsArray`
   - 测试缺失 `locations` 数组的旧种子文件仍可导入，并能推导位置
+- `testLegacyImporterNormalizesSeedLocationsWhenLocationIDContainsName`
+  - 测试 seed 中地点 ID 写成地点名时仍会被归一化成可用地点 ID
 
 ## 3. `homeLibraryTests/CloudKitLiveIntegrationTests.swift`
 
@@ -160,8 +171,6 @@
 
 从现有测试文件看，下面这些内容暂时没有看到明确自动化覆盖，或者覆盖还比较浅：
 
-- 编辑图书、删除图书的 UI/业务流程
-- 位置管理的增删改与可见性排序
 - CloudKit 分享接收方流程
 - 多设备/多仓库冲突处理
 - 导入失败、损坏文件、非法字段等异常路径
@@ -170,7 +179,7 @@
 
 如果后面要继续补测试，优先级建议是：
 
-1. `LibraryStore` 的删书/改书/位置管理
-2. CloudKit 分享与同步冲突
+1. CloudKit 分享与同步冲突
+2. 导入失败与回滚类异常测试
 3. UI 的编辑、删除、导入导出主路径
-4. 导入失败与回滚类异常测试
+4. 大数据量、性能与并发相关测试

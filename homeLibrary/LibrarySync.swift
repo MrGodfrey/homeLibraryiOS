@@ -71,6 +71,13 @@ protocol LibraryRemoteSyncing {
     func deleteRepository(_ repository: LibraryRepositoryReference) async throws
 }
 
+protocol LibraryRemoteIncrementalSyncing {
+    func refreshRepositoryChanges(
+        _ repository: LibraryRepositoryReference,
+        since changeTokenData: Data?
+    ) async throws -> RemoteRepositoryChangeSet
+}
+
 protocol LibraryShareMetadataAccepting {
     func acceptShare(metadata: CKShare.Metadata) async throws
 }
@@ -315,7 +322,7 @@ actor InMemoryLibraryRemoteService: LibraryRemoteSyncing {
     }
 }
 
-final class CloudKitLibraryService: NSObject, LibraryRemoteSyncing {
+final class CloudKitLibraryService: NSObject, LibraryRemoteSyncing, LibraryRemoteIncrementalSyncing {
     private enum RecordType {
         nonisolated static let repository = "LibraryRepository"
         nonisolated static let book = "LibraryBook"
@@ -351,6 +358,13 @@ final class CloudKitLibraryService: NSObject, LibraryRemoteSyncing {
         nonisolated static let repository = "repository"
         nonisolated static func location(_ id: String) -> String { "location.\(id)" }
         nonisolated static func book(_ id: String) -> String { "book.\(id)" }
+    }
+
+    private struct ZoneRecordChanges {
+        var records: [CKRecord]
+        var deletedRecordIDs: [CKRecord.ID]
+        var changeTokenData: Data?
+        var isFullRefresh: Bool
     }
 
     private let container: CKContainer
@@ -425,22 +439,61 @@ final class CloudKitLibraryService: NSObject, LibraryRemoteSyncing {
     }
 
     func refreshRepository(_ repository: LibraryRepositoryReference) async throws -> RemoteRepositorySnapshot {
+        let changes = try await refreshRepositoryChanges(repository, since: nil)
+        return RemoteRepositorySnapshot(
+            repository: changes.repository,
+            locations: changes.locations,
+            books: changes.books
+        )
+    }
+
+    func refreshRepositoryChanges(
+        _ repository: LibraryRepositoryReference,
+        since changeTokenData: Data?
+    ) async throws -> RemoteRepositoryChangeSet {
         try await ensureCloudAccountAvailable()
         let database = database(for: repository.databaseScope)
         let zoneID = repository.zoneID
-
-        let repositoryRecord = try await fetchRecord(
-            recordID: CKRecord.ID(recordName: RecordName.repository, zoneID: zoneID),
-            in: database,
-            operationName: "refreshRepository.repository"
-        )
         let zone = try await fetchZone(zoneID: zoneID, in: database)
-        let updatedRepository = try makeRepositoryReference(from: repositoryRecord, role: repository.role, scope: repository.databaseScope, zone: zone)
-        let locationRecords = try await fetchRecords(recordType: RecordType.location, inZoneWith: zoneID, database: database, operationName: "refreshRepository.locations")
-        let bookRecords = try await fetchRecords(recordType: RecordType.book, inZoneWith: zoneID, database: database, operationName: "refreshRepository.books")
+        let zoneChanges = try await fetchZoneRecordChanges(
+            inZoneWith: zoneID,
+            database: database,
+            since: changeTokenData,
+            operationName: "refreshRepository.changes"
+        )
 
-        let locations = try locationRecords.map(Self.makeLocation).sorted { $0.sortOrder < $1.sortOrder }
-        let books = try bookRecords.map { try Self.makeRemoteBookSnapshot(from: $0) }
+        var repositoryRecord = zoneChanges.records.first {
+            $0.recordType == RecordType.repository &&
+                $0.recordID.recordName == RecordName.repository
+        }
+
+        if repositoryRecord == nil && zoneChanges.isFullRefresh {
+            repositoryRecord = try await fetchRecord(
+                recordID: CKRecord.ID(recordName: RecordName.repository, zoneID: zoneID),
+                in: database,
+                operationName: "refreshRepository.repository"
+            )
+        }
+
+        let updatedRepository: LibraryRepositoryReference
+        if let repositoryRecord {
+            updatedRepository = try makeRepositoryReference(
+                from: repositoryRecord,
+                role: repository.role,
+                scope: repository.databaseScope,
+                zone: zone
+            )
+        } else {
+            updatedRepository = repository.withShareState(from: zone)
+        }
+
+        let locations = try zoneChanges.records
+            .filter { $0.recordType == RecordType.location }
+            .map(Self.makeLocation)
+            .sorted { $0.sortOrder < $1.sortOrder }
+        let books = try zoneChanges.records
+            .filter { $0.recordType == RecordType.book }
+            .map { try Self.makeRemoteBookSnapshot(from: $0) }
             .sorted { left, right in
                 if left.book.updatedAt != right.book.updatedAt {
                     return left.book.updatedAt > right.book.updatedAt
@@ -449,7 +502,15 @@ final class CloudKitLibraryService: NSObject, LibraryRemoteSyncing {
                 return left.book.createdAt > right.book.createdAt
             }
 
-        return RemoteRepositorySnapshot(repository: updatedRepository, locations: locations, books: books)
+        return RemoteRepositoryChangeSet(
+            repository: updatedRepository,
+            locations: locations,
+            deletedLocationIDs: zoneChanges.deletedRecordIDs.compactMap { Self.locationID(fromRecordName: $0.recordName) },
+            books: books,
+            deletedBookIDs: zoneChanges.deletedRecordIDs.compactMap { Self.bookID(fromRecordName: $0.recordName) },
+            changeTokenData: zoneChanges.changeTokenData,
+            isFullRefresh: zoneChanges.isFullRefresh
+        )
     }
 
     func saveLocations(_ locations: [LibraryLocation], in repository: LibraryRepositoryReference) async throws -> [LibraryLocation] {
@@ -831,11 +892,29 @@ final class CloudKitLibraryService: NSObject, LibraryRemoteSyncing {
         database: CKDatabase,
         operationName: String
     ) async throws -> [CKRecord] {
-        logCloudKit(operationName, scope: database.databaseScope, zoneID: zoneID, detail: "scan zone records")
+        try await fetchZoneRecordChanges(
+            inZoneWith: zoneID,
+            database: database,
+            since: nil,
+            operationName: operationName
+        ).records
+    }
+
+    private func fetchZoneRecordChanges(
+        inZoneWith zoneID: CKRecordZone.ID,
+        database: CKDatabase,
+        since changeTokenData: Data?,
+        operationName: String
+    ) async throws -> ZoneRecordChanges {
+        let startingChangeToken = Self.decodeChangeToken(from: changeTokenData)
+        let isFullRefresh = startingChangeToken == nil
+        let scanMode = isFullRefresh ? "full" : "incremental"
+        logCloudKit(operationName, scope: database.databaseScope, zoneID: zoneID, detail: "\(scanMode) zone changes")
 
         do {
             var recordsByID: [CKRecord.ID: CKRecord] = [:]
-            var changeToken: CKServerChangeToken?
+            var deletedRecordIDs: [CKRecord.ID] = []
+            var changeToken = startingChangeToken
             var moreComing = false
 
             repeat {
@@ -850,12 +929,26 @@ final class CloudKitLibraryService: NSObject, LibraryRemoteSyncing {
                 }
                 for deletion in changes.deletions {
                     recordsByID[deletion.recordID] = nil
+                    deletedRecordIDs.append(deletion.recordID)
                 }
                 changeToken = changes.changeToken
                 moreComing = changes.moreComing
             } while moreComing
 
-            return Array(recordsByID.values)
+            return ZoneRecordChanges(
+                records: Array(recordsByID.values),
+                deletedRecordIDs: deletedRecordIDs,
+                changeTokenData: Self.encodeChangeToken(changeToken),
+                isFullRefresh: isFullRefresh
+            )
+        } catch let error as CKError where error.code == .changeTokenExpired && changeTokenData != nil {
+            logCloudKit("\(operationName).expiredToken", scope: database.databaseScope, zoneID: zoneID, detail: "retry full zone changes")
+            return try await fetchZoneRecordChanges(
+                inZoneWith: zoneID,
+                database: database,
+                since: nil,
+                operationName: operationName
+            )
         } catch {
             logCloudKit("\(operationName).failed", scope: database.databaseScope, zoneID: zoneID, detail: "\(error)")
             throw mapCloudError(error)
@@ -1085,6 +1178,40 @@ final class CloudKitLibraryService: NSObject, LibraryRemoteSyncing {
         }
     }
 
+    nonisolated private static func locationID(fromRecordName recordName: String) -> String? {
+        let prefix = "location."
+        guard recordName.hasPrefix(prefix) else {
+            return nil
+        }
+
+        return String(recordName.dropFirst(prefix.count))
+    }
+
+    nonisolated private static func bookID(fromRecordName recordName: String) -> String? {
+        let prefix = "book."
+        guard recordName.hasPrefix(prefix) else {
+            return nil
+        }
+
+        return String(recordName.dropFirst(prefix.count))
+    }
+
+    nonisolated private static func encodeChangeToken(_ token: CKServerChangeToken?) -> Data? {
+        guard let token else {
+            return nil
+        }
+
+        return try? NSKeyedArchiver.archivedData(withRootObject: token, requiringSecureCoding: true)
+    }
+
+    nonisolated private static func decodeChangeToken(from data: Data?) -> CKServerChangeToken? {
+        guard let data else {
+            return nil
+        }
+
+        return try? NSKeyedUnarchiver.unarchivedObject(ofClass: CKServerChangeToken.self, from: data)
+    }
+
     nonisolated private static func loadAssetData(from asset: CKAsset?) -> Data? {
         guard let url = asset?.fileURL else {
             return nil
@@ -1120,6 +1247,19 @@ private extension Dictionary where Key == CKRecordZone.ID, Value == CKRecordZone
 private extension LibraryRepositoryReference {
     var zoneID: CKRecordZone.ID {
         CKRecordZone.ID(zoneName: zoneName, ownerName: zoneOwnerName)
+    }
+
+    func withShareState(from zone: CKRecordZone) -> LibraryRepositoryReference {
+        LibraryRepositoryReference(
+            id: id,
+            name: name,
+            role: role,
+            databaseScope: databaseScope,
+            zoneName: zoneName,
+            zoneOwnerName: zoneOwnerName,
+            shareRecordName: zone.share?.recordID.recordName,
+            shareStatus: zone.share == nil ? .notShared : .shared
+        )
     }
 }
 

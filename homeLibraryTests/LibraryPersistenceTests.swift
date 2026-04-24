@@ -108,6 +108,71 @@ final class LibraryPersistenceTests: XCTestCase {
         XCTAssertEqual(snapshot.locations.last?.isVisible, false)
     }
 
+    func testApplyRemoteChangesMergesIncrementalUpdateAndPersistsChangeToken() throws {
+        let rootURL = try makeTemporaryDirectory()
+        let store = LibraryCacheStore(rootURL: rootURL)
+        let repositoryID = "repo-incremental"
+        let initialToken = Data("token-1".utf8)
+        let updatedToken = Data("token-2".utf8)
+        let keepBook = Book(
+            id: "keep",
+            title: "保留的书",
+            locationID: "study",
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
+        let deletedBook = Book(
+            id: "deleted",
+            title: "会被删除",
+            locationID: "storage",
+            coverAssetID: "cover-stale",
+            createdAt: Date(timeIntervalSince1970: 3),
+            updatedAt: Date(timeIntervalSince1970: 4)
+        )
+
+        try store.replaceAllContent(
+            books: [keepBook, deletedBook],
+            locations: [
+                LibraryLocation(id: "study", name: "书房", sortOrder: 0),
+                LibraryLocation(id: "storage", name: "储藏室", sortOrder: 1)
+            ],
+            coverDataByAssetID: ["cover-stale": Data("stale-cover".utf8)],
+            repositoryID: repositoryID,
+            synchronizedAt: Date(timeIntervalSince1970: 10),
+            cloudKitChangeTokenData: initialToken,
+            updatesCloudKitChangeToken: true
+        )
+
+        let changedBook = Book(
+            id: "changed",
+            title: "增量新增",
+            locationID: "study",
+            coverAssetID: "cover-new",
+            createdAt: Date(timeIntervalSince1970: 5),
+            updatedAt: Date(timeIntervalSince1970: 6)
+        )
+        try store.applyRemoteChanges(
+            upsertingBooks: [changedBook],
+            deletingBookIDs: ["deleted"],
+            upsertingLocations: [
+                LibraryLocation(id: "living", name: "客厅", sortOrder: 1)
+            ],
+            deletingLocationIDs: ["storage"],
+            coverDataByAssetID: ["cover-new": Data("new-cover".utf8)],
+            repositoryID: repositoryID,
+            synchronizedAt: Date(timeIntervalSince1970: 20),
+            cloudKitChangeTokenData: updatedToken
+        )
+
+        let snapshot = try store.loadSnapshot(repositoryID: repositoryID)
+
+        XCTAssertEqual(snapshot.books.map(\.id).sorted(), ["changed", "keep"])
+        XCTAssertEqual(snapshot.locations.map(\.id), ["study", "living"])
+        XCTAssertEqual(try store.coverData(for: "cover-new", repositoryID: repositoryID), Data("new-cover".utf8))
+        XCTAssertNil(try store.coverData(for: "cover-stale", repositoryID: repositoryID))
+        XCTAssertEqual(try store.cloudKitChangeTokenData(repositoryID: repositoryID), updatedToken)
+    }
+
     func testCacheStoreExportsImportPackageWithEmbeddedCoverData() throws {
         let rootURL = try makeTemporaryDirectory()
         let store = LibraryCacheStore(rootURL: rootURL)

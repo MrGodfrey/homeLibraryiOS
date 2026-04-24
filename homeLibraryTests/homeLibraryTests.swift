@@ -483,6 +483,92 @@ final class homeLibraryTests: XCTestCase {
     }
 
     @MainActor
+    func testStoreRefreshUsesCachedCloudKitChangeTokenAndMergesIncrementalChanges() async throws {
+        let namespace = "store-incremental-\(UUID().uuidString)"
+        let sessionStore = RepositorySessionStore(namespace: namespace)
+        let tempRoot = try makeTemporaryDirectory()
+        let cacheStore = LibraryCacheStore(rootURL: tempRoot.appendingPathComponent("cloudkit-cache", isDirectory: true))
+        let repository = LibraryRepositoryReference(
+            id: "library.incremental",
+            name: "增量书库",
+            role: .owner,
+            databaseScope: .private,
+            zoneName: "library.incremental",
+            zoneOwnerName: CKCurrentUserDefaultName,
+            shareRecordName: nil,
+            shareStatus: .notShared
+        )
+        let initialToken = Data("token-1".utf8)
+        let updatedToken = Data("token-2".utf8)
+        let unchangedBook = Book(
+            id: "unchanged",
+            title: "不应重新下载的书",
+            locationID: "study",
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
+        let deletedBook = Book(
+            id: "deleted",
+            title: "远端删除的书",
+            locationID: "study",
+            createdAt: Date(timeIntervalSince1970: 3),
+            updatedAt: Date(timeIntervalSince1970: 4)
+        )
+
+        try cacheStore.replaceAllContent(
+            books: [unchangedBook, deletedBook],
+            locations: [LibraryLocation(id: "study", name: "书房", sortOrder: 0)],
+            coverDataByAssetID: [:],
+            repositoryID: repository.id,
+            synchronizedAt: Date(timeIntervalSince1970: 10),
+            cloudKitChangeTokenData: initialToken,
+            updatesCloudKitChangeToken: true
+        )
+        sessionStore.save(LibrarySessionState(currentRepository: repository))
+
+        let remoteBook = RemoteBookSnapshot(
+            book: Book(
+                id: "remote-new",
+                title: "远端新增",
+                locationID: "study",
+                createdAt: Date(timeIntervalSince1970: 5),
+                updatedAt: Date(timeIntervalSince1970: 6)
+            ),
+            coverData: nil
+        )
+        let remoteService = ScriptedIncrementalLibraryRemoteService(
+            repository: repository,
+            changeSet: RemoteRepositoryChangeSet(
+                repository: repository,
+                locations: [],
+                deletedLocationIDs: [],
+                books: [remoteBook],
+                deletedBookIDs: ["deleted"],
+                changeTokenData: updatedToken,
+                isFullRefresh: false
+            )
+        )
+        let configuration = LibraryAppConfiguration(
+            cacheStore: cacheStore,
+            legacyImporter: LegacyLibraryImporter(storageRootURL: tempRoot),
+            sessionStore: sessionStore,
+            remoteService: remoteService,
+            preferredOwnedRepositoryName: "我的家庭书库"
+        )
+
+        let store = LibraryStore(configuration: configuration)
+        await store.loadBooks(force: true)
+
+        let requestedChangeTokens = await remoteService.recordedRequestedChangeTokens()
+        let fullRefreshCallCount = await remoteService.recordedFullRefreshCallCount()
+
+        XCTAssertEqual(Set(store.books.map(\.id)), ["unchanged", "remote-new"])
+        XCTAssertEqual(requestedChangeTokens, [initialToken])
+        XCTAssertEqual(fullRefreshCallCount, 0)
+        XCTAssertEqual(try cacheStore.cloudKitChangeTokenData(repositoryID: repository.id), updatedToken)
+    }
+
+    @MainActor
     func testStoreAllowsRemovingOnlyNonCurrentRepositoryWhenMultipleRepositoriesExist() async throws {
         let namespace = "store-remove-rules-\(UUID().uuidString)"
         let sessionStore = RepositorySessionStore(namespace: namespace)
@@ -899,5 +985,74 @@ final class homeLibraryTests: XCTestCase {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+}
+
+private actor ScriptedIncrementalLibraryRemoteService: LibraryRemoteSyncing, LibraryRemoteIncrementalSyncing {
+    private enum ScriptedError: Error {
+        case unsupported
+    }
+
+    let repository: LibraryRepositoryReference
+    var changeSet: RemoteRepositoryChangeSet
+    private(set) var requestedChangeTokens: [Data?] = []
+    private(set) var fullRefreshCallCount = 0
+
+    init(repository: LibraryRepositoryReference, changeSet: RemoteRepositoryChangeSet) {
+        self.repository = repository
+        self.changeSet = changeSet
+    }
+
+    func listRepositories() async throws -> [LibraryRepositoryReference] {
+        [repository]
+    }
+
+    func createOwnedRepository(preferredName: String) async throws -> LibraryRepositoryReference {
+        throw ScriptedError.unsupported
+    }
+
+    func refreshRepository(_ repository: LibraryRepositoryReference) async throws -> RemoteRepositorySnapshot {
+        fullRefreshCallCount += 1
+        throw ScriptedError.unsupported
+    }
+
+    func refreshRepositoryChanges(
+        _ repository: LibraryRepositoryReference,
+        since changeTokenData: Data?
+    ) async throws -> RemoteRepositoryChangeSet {
+        requestedChangeTokens.append(changeTokenData)
+        return changeSet
+    }
+
+    func recordedRequestedChangeTokens() -> [Data?] {
+        requestedChangeTokens
+    }
+
+    func recordedFullRefreshCallCount() -> Int {
+        fullRefreshCallCount
+    }
+
+    func saveLocations(_ locations: [LibraryLocation], in repository: LibraryRepositoryReference) async throws -> [LibraryLocation] {
+        throw ScriptedError.unsupported
+    }
+
+    func upsertBook(_ book: Book, coverData: Data?, in repository: LibraryRepositoryReference) async throws -> RemoteBookSnapshot {
+        throw ScriptedError.unsupported
+    }
+
+    func deleteBook(id: String, deletedAt: Date, in repository: LibraryRepositoryReference) async throws {
+        throw ScriptedError.unsupported
+    }
+
+    func clearRepository(_ repository: LibraryRepositoryReference, resetLocations: [LibraryLocation]) async throws {
+        throw ScriptedError.unsupported
+    }
+
+    func exportRepository(_ repository: LibraryRepositoryReference) async throws -> LibraryImportPackage {
+        throw ScriptedError.unsupported
+    }
+
+    func deleteRepository(_ repository: LibraryRepositoryReference) async throws {
+        throw ScriptedError.unsupported
     }
 }

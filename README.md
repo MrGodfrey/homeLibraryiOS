@@ -349,8 +349,10 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 #### 7.5.2 仓库刷新
 
 - 确定当前仓库后，按 zone 读取根记录、地点记录和图书记录
-- zone 内数据读取通过 `recordZoneChanges(inZoneWith:since:)` 完成
-- 读取后重新组装为 `RemoteRepositorySnapshot`
+- 首次刷新、token 缺失或 token 失效时，会用 `recordZoneChanges(inZoneWith:since: nil)` 拉取当前 zone 的完整记录，并把新的 `CKServerChangeToken` 写入本地 cache manifest
+- 后续刷新会从 cache manifest 读取上次保存的 zone change token，通过 `recordZoneChanges(inZoneWith:since:)` 只拉取增量变更
+- 增量结果会合并到本地缓存：新增/修改的地点和图书会覆盖写入，远端删除记录会从本地移除，未变化内容不会被重新下载或重写
+- 如果 CloudKit 返回 `changeTokenExpired`，应用会自动退回一次完整刷新并保存新的 token
 
 也就是说，应用不是把所有图书都混在一个全局列表里，而是始终围绕“当前 zone 对应的那座仓库”刷新。
 
@@ -411,11 +413,11 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 
 ### 7.7 测试覆盖
 
-当前仓库共有 **56 个 XCTest**，外加 **1 个双模拟器共享验证脚本**。
+当前仓库共有 **58 个 XCTest**，外加 **1 个双模拟器共享验证脚本**。
 
 #### 7.7.1 单元与状态管理测试
 
-`homeLibraryTests/homeLibraryTests.swift` 当前包含 **34 个测试**，覆盖的重点包括：
+`homeLibraryTests/homeLibraryTests.swift` 当前包含 **35 个测试**，覆盖的重点包括：
 
 - 图书筛选
 - 默认排序与按作者/标题排序
@@ -433,6 +435,7 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 - 地点显隐与默认地点即时生效
 - 地点重排保存
 - 导入、导出、清空当前仓库
+- CloudKit zone change token 驱动的增量刷新合并
 
 `homeLibraryTests/LibraryExportProgressTests.swift` 当前包含 **1 个测试**，覆盖的重点包括：
 
@@ -447,10 +450,11 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 
 #### 7.7.2 持久化与导入测试
 
-`homeLibraryTests/LibraryPersistenceTests.swift` 当前包含 **8 个测试**，覆盖的重点包括：
+`homeLibraryTests/LibraryPersistenceTests.swift` 当前包含 **9 个测试**，覆盖的重点包括：
 
 - 图书元数据和封面文件分离存储
 - 全量替换缓存时的旧资源清理
+- 增量远端变更合并、远端删除处理和 CloudKit change token 持久化
 - 导出包是否正确内嵌封面
 - 旧目录结构导入
 - 旧版结构化 JSON 导入

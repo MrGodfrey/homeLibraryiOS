@@ -188,6 +188,16 @@ nonisolated struct RemoteRepositorySnapshot: Sendable {
     let books: [RemoteBookSnapshot]
 }
 
+nonisolated struct RemoteRepositoryChangeSet: Sendable {
+    let repository: LibraryRepositoryReference
+    let locations: [LibraryLocation]
+    let deletedLocationIDs: [String]
+    let books: [RemoteBookSnapshot]
+    let deletedBookIDs: [String]
+    let changeTokenData: Data?
+    let isFullRefresh: Bool
+}
+
 nonisolated struct LibrarySessionState: Equatable, Codable, Sendable {
     var currentRepository: LibraryRepositoryReference?
     var bookSortOrderByRepositoryID: [String: LibraryBookSortOrder]

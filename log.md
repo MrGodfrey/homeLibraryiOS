@@ -356,3 +356,19 @@
 ### 验证记录
 
 - `git status --short` 已确认改动范围仅包含 `LICENSE`、`README.md` 和 `log.md`
+
+## 2026-04-24（CloudKit 增量刷新与测试补强）
+
+- 修复 CloudKit 仓库刷新每次都全量扫描当前 zone 的问题：本地 cache manifest 现在会保存 `CKServerChangeToken`，首次刷新或 token 失效时才全量拉取，后续刷新改为携带 token 拉取增量变更。
+- 新增增量变更合并路径：远端新增/修改的图书和地点会覆盖写入本地缓存，远端删除会移除本地记录，未变化内容不再被重新下载或重写。
+- 保留本地写入后的旧 token：新增、编辑、删除、地点保存等本机操作不会清空 change token，下一次远端刷新会从旧 token 继续取得 CloudKit 回放结果并幂等合并。
+- 补充测试覆盖：新增缓存层增量合并与 token 持久化测试，以及 `LibraryStore` 使用缓存 token 做增量刷新、不丢未变化数据的回归测试。
+- 同步更新 `README.md` 和 `TEST.md`，补充当前增量同步链路和测试数量。
+
+### 验证记录
+
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryTests test` 通过
+  - `homeLibraryTests.xctest` 共执行 `50` 个测试，其中 `1` 个 CloudKit live 测试按预期跳过，其余全部通过
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' test` 通过
+  - 单元测试执行 `50` 个，其中 `1` 个 CloudKit live 测试按预期跳过
+  - UI 测试执行 `8` 个，全部通过
