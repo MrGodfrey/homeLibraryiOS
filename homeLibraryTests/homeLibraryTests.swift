@@ -569,6 +569,71 @@ final class homeLibraryTests: XCTestCase {
     }
 
     @MainActor
+    func testStoreRestoresCachedBooksBeforeRemoteRepositoryListCompletes() async throws {
+        let namespace = "store-cache-first-\(UUID().uuidString)"
+        let sessionStore = RepositorySessionStore(namespace: namespace)
+        let tempRoot = try makeTemporaryDirectory()
+        let cacheStore = LibraryCacheStore(rootURL: tempRoot.appendingPathComponent("cloudkit-cache", isDirectory: true))
+        let repository = LibraryRepositoryReference(
+            id: "library.cache-first",
+            name: "缓存优先书库",
+            role: .owner,
+            databaseScope: .private,
+            zoneName: "library.cache-first",
+            zoneOwnerName: CKCurrentUserDefaultName,
+            shareRecordName: nil,
+            shareStatus: .notShared
+        )
+        let cachedBook = Book(
+            id: "cached",
+            title: "本地缓存书",
+            locationID: "study",
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
+        let locations = [LibraryLocation(id: "study", name: "书房", sortOrder: 0)]
+
+        try cacheStore.replaceAllContent(
+            books: [cachedBook],
+            locations: locations,
+            coverDataByAssetID: [:],
+            repositoryID: repository.id,
+            synchronizedAt: Date(timeIntervalSince1970: 10)
+        )
+        sessionStore.save(LibrarySessionState(currentRepository: repository))
+
+        let remoteService = SuspendedRepositoryListRemoteService(
+            repository: repository,
+            snapshot: RemoteRepositorySnapshot(
+                repository: repository,
+                locations: locations,
+                books: [RemoteBookSnapshot(book: cachedBook, coverData: nil)]
+            )
+        )
+        let configuration = LibraryAppConfiguration(
+            cacheStore: cacheStore,
+            legacyImporter: LegacyLibraryImporter(storageRootURL: tempRoot),
+            sessionStore: sessionStore,
+            remoteService: remoteService,
+            preferredOwnedRepositoryName: "我的家庭书库"
+        )
+        let store = LibraryStore(configuration: configuration)
+
+        let loadTask = Task {
+            await store.loadBooks(force: true)
+        }
+
+        await remoteService.waitUntilListRepositoriesRequested()
+
+        XCTAssertEqual(store.books.map(\.title), ["本地缓存书"])
+        XCTAssertEqual(store.locations.map(\.name), ["书房"])
+        XCTAssertFalse(store.isLoading)
+
+        await remoteService.releaseListRepositories()
+        await loadTask.value
+    }
+
+    @MainActor
     func testStoreAllowsRemovingOnlyNonCurrentRepositoryWhenMultipleRepositoriesExist() async throws {
         let namespace = "store-remove-rules-\(UUID().uuidString)"
         let sessionStore = RepositorySessionStore(namespace: namespace)
@@ -1030,6 +1095,92 @@ private actor ScriptedIncrementalLibraryRemoteService: LibraryRemoteSyncing, Lib
 
     func recordedFullRefreshCallCount() -> Int {
         fullRefreshCallCount
+    }
+
+    func saveLocations(_ locations: [LibraryLocation], in repository: LibraryRepositoryReference) async throws -> [LibraryLocation] {
+        throw ScriptedError.unsupported
+    }
+
+    func upsertBook(_ book: Book, coverData: Data?, in repository: LibraryRepositoryReference) async throws -> RemoteBookSnapshot {
+        throw ScriptedError.unsupported
+    }
+
+    func deleteBook(id: String, deletedAt: Date, in repository: LibraryRepositoryReference) async throws {
+        throw ScriptedError.unsupported
+    }
+
+    func clearRepository(_ repository: LibraryRepositoryReference, resetLocations: [LibraryLocation]) async throws {
+        throw ScriptedError.unsupported
+    }
+
+    func exportRepository(_ repository: LibraryRepositoryReference) async throws -> LibraryImportPackage {
+        throw ScriptedError.unsupported
+    }
+
+    func deleteRepository(_ repository: LibraryRepositoryReference) async throws {
+        throw ScriptedError.unsupported
+    }
+}
+
+private actor SuspendedRepositoryListRemoteService: LibraryRemoteSyncing {
+    private enum ScriptedError: Error {
+        case unsupported
+    }
+
+    let repository: LibraryRepositoryReference
+    let snapshot: RemoteRepositorySnapshot
+    private var hasRequestedListRepositories = false
+    private var didReleaseListRepositories = false
+    private var requestContinuations: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuations: [CheckedContinuation<Void, Never>] = []
+
+    init(repository: LibraryRepositoryReference, snapshot: RemoteRepositorySnapshot) {
+        self.repository = repository
+        self.snapshot = snapshot
+    }
+
+    func listRepositories() async throws -> [LibraryRepositoryReference] {
+        hasRequestedListRepositories = true
+        let pendingRequestContinuations = requestContinuations
+        requestContinuations.removeAll()
+        for continuation in pendingRequestContinuations {
+            continuation.resume()
+        }
+
+        if !didReleaseListRepositories {
+            await withCheckedContinuation { continuation in
+                releaseContinuations.append(continuation)
+            }
+        }
+
+        return [repository]
+    }
+
+    func waitUntilListRepositoriesRequested() async {
+        guard !hasRequestedListRepositories else {
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            requestContinuations.append(continuation)
+        }
+    }
+
+    func releaseListRepositories() {
+        didReleaseListRepositories = true
+        let pendingReleaseContinuations = releaseContinuations
+        releaseContinuations.removeAll()
+        for continuation in pendingReleaseContinuations {
+            continuation.resume()
+        }
+    }
+
+    func createOwnedRepository(preferredName: String) async throws -> LibraryRepositoryReference {
+        throw ScriptedError.unsupported
+    }
+
+    func refreshRepository(_ repository: LibraryRepositoryReference) async throws -> RemoteRepositorySnapshot {
+        snapshot
     }
 
     func saveLocations(_ locations: [LibraryLocation], in repository: LibraryRepositoryReference) async throws -> [LibraryLocation] {

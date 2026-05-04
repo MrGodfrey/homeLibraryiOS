@@ -180,12 +180,20 @@ final class LibraryStore: ObservableObject {
 
         isLoadInFlight = true
         isLoading = books.isEmpty
+        var restoredRepository: LibraryRepositoryReference?
         defer {
             isLoadInFlight = false
             isLoading = false
         }
 
         do {
+            if let cachedRepository = sessionState.currentRepository,
+               await restoreCachedContentIfAvailable(repositoryID: cachedRepository.id) {
+                restoredRepository = cachedRepository
+                hasLoaded = true
+                isLoading = false
+            }
+
             guard let repository = try await resolveCurrentRepository(forceRefresh: force) else {
                 books = []
                 locations = []
@@ -196,10 +204,16 @@ final class LibraryStore: ObservableObject {
                 return
             }
 
-            let didRestoreCache = await restoreCachedContentIfAvailable(repositoryID: repository.id)
-            if didRestoreCache {
-                hasLoaded = true
-                isLoading = false
+            if !sameRepository(restoredRepository, repository) {
+                if await restoreCachedContentIfAvailable(repositoryID: repository.id) {
+                    hasLoaded = true
+                    isLoading = false
+                } else if restoredRepository != nil {
+                    books = []
+                    locations = []
+                    coverCache = [:]
+                    isLoading = true
+                }
             }
 
             try await refreshFromCloud(repository: repository)
@@ -1007,9 +1021,22 @@ final class LibraryStore: ObservableObject {
         }.value
     }
 
+    private func loadExistingCacheSnapshot(repositoryID: String) async throws -> LibraryCacheSnapshot? {
+        let cacheStore = self.cacheStore
+        return try await Task.detached(priority: .utility) {
+            try cacheStore.loadSnapshotIfAvailable(repositoryID: repositoryID)
+        }.value
+    }
+
     private func restoreCachedContentIfAvailable(repositoryID: String) async -> Bool {
         do {
-            try await reloadFromCache(repositoryID: repositoryID)
+            guard let snapshot = try await loadExistingCacheSnapshot(repositoryID: repositoryID) else {
+                return false
+            }
+
+            books = snapshot.books
+            locations = snapshot.locations
+            coverCache = coverCache.filter { snapshot.referencedAssetIDs.contains($0.key) }
             validateSelectedLocation()
             return !books.isEmpty || !locations.isEmpty
         } catch {

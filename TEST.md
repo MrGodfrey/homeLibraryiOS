@@ -2,9 +2,9 @@
 
 ## 总览
 
-目前仓库里有 **58 个 XCTest 用例/执行项**，外加 **1 个辅助脚本**：
+目前仓库里有 **59 个 XCTest 用例/执行项**，外加 **1 个辅助脚本**：
 
-- `homeLibraryTests/homeLibraryTests.swift`：35 个单元/状态管理测试
+- `homeLibraryTests/homeLibraryTests.swift`：36 个单元/状态管理测试
 - `homeLibraryTests/LibraryPersistenceTests.swift`：9 个持久化与导入测试
 - `homeLibraryTests/CloudKitLiveIntegrationTests.swift`：1 个真实 CloudKit 集成测试
 - `homeLibraryTests/LibraryCoverCompressionTests.swift`：4 个封面压缩测试
@@ -68,6 +68,8 @@
 - `testStoreRefreshUsesCachedCloudKitChangeTokenAndMergesIncrementalChanges`
   - 测试刷新时会携带本地保存的 CloudKit zone change token
   - 测试增量变更只合并新增/删除内容，不会丢掉未变化的本地缓存
+- `testStoreRestoresCachedBooksBeforeRemoteRepositoryListCompletes`
+  - 测试启动刷新远端仓库列表尚未返回时，`LibraryStore` 已先恢复当前仓库的本地缓存图书
 
 ## 2. `homeLibraryTests/LibraryPersistenceTests.swift`
 

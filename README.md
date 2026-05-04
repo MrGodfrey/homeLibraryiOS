@@ -221,6 +221,8 @@
 - 界面框架：SwiftUI
 - Scheme：`homeLibrary`
 - Bundle ID：`yu.homeLibrary`
+- 用户可见版本号：`homeLibrary.xcodeproj/project.pbxproj` 中 `homeLibrary` target 的 Debug / Release 配置都需要维护 `MARKETING_VERSION`
+- 构建号：同一位置的 `CURRENT_PROJECT_VERSION`
 - 应用图标：主屏幕图标资源统一由 `homeLibrary/Assets.xcassets/AppIcon.appiconset` 管理，当前已切换到新的图标稿
 - iCloud 容器：`iCloud.yu.homeLibrary`
 - 默认运行方式：真实环境走 iCloud 云同步，测试默认走内存远端
@@ -327,7 +329,7 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 这层缓存承担三件事：
 
 1. 恢复上次使用的仓库内容
-2. 减少重复读取远端数据时的等待
+2. 应用启动时先展示上次缓存内容，再静默刷新 CloudKit
 3. 让封面文件和图书元数据分开存放，避免单条图书记录过重
 
 另外，新增图书页还有一层当前会话内的草稿缓存：如果用户误滑关闭 sheet，再次点“添加新书”会恢复未保存输入；这份草稿不会直接写进仓库。
@@ -348,6 +350,7 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 
 #### 7.5.2 仓库刷新
 
+- 如果上次使用的仓库已有本地缓存，启动时会先从 `cloudkit-cache` 恢复图书和地点，让首页立即可见；随后再刷新远端仓库列表和 CloudKit 增量
 - 确定当前仓库后，按 zone 读取根记录、地点记录和图书记录
 - 首次刷新、token 缺失或 token 失效时，会用 `recordZoneChanges(inZoneWith:since: nil)` 拉取当前 zone 的完整记录，并把新的 `CKServerChangeToken` 写入本地 cache manifest
 - 后续刷新会从 cache manifest 读取上次保存的 zone change token，通过 `recordZoneChanges(inZoneWith:since:)` 只拉取增量变更
@@ -413,11 +416,11 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 
 ### 7.7 测试覆盖
 
-当前仓库共有 **58 个 XCTest**，外加 **1 个双模拟器共享验证脚本**。
+当前仓库共有 **59 个 XCTest**，外加 **1 个双模拟器共享验证脚本**。
 
 #### 7.7.1 单元与状态管理测试
 
-`homeLibraryTests/homeLibraryTests.swift` 当前包含 **35 个测试**，覆盖的重点包括：
+`homeLibraryTests/homeLibraryTests.swift` 当前包含 **36 个测试**，覆盖的重点包括：
 
 - 图书筛选
 - 默认排序与按作者/标题排序
@@ -436,6 +439,7 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 - 地点重排保存
 - 导入、导出、清空当前仓库
 - CloudKit zone change token 驱动的增量刷新合并
+- 启动时本地缓存优先恢复，远端同步稍后静默应用
 
 `homeLibraryTests/LibraryExportProgressTests.swift` 当前包含 **1 个测试**，覆盖的重点包括：
 

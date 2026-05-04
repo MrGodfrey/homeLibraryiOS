@@ -372,3 +372,21 @@
 - `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' test` 通过
   - 单元测试执行 `50` 个，其中 `1` 个 CloudKit live 测试按预期跳过
   - UI 测试执行 `8` 个，全部通过
+
+## 2026-05-04（启动优先恢复本地缓存）
+
+- 调整 `LibraryStore.loadBooks` 的启动顺序：如果上次选中的仓库已有 `cloudkit-cache`，先恢复本地图书和地点，再刷新远端仓库列表与 CloudKit 数据，避免首页在同步返回前空白。
+- 为缓存层新增只读取已存在快照的入口，避免为了探测缓存而创建新的空缓存目录。
+- 补充回归测试：远端仓库列表请求被挂起时，验证 `LibraryStore` 已先展示当前仓库的缓存图书。
+- 同步更新 `README.md` 和 `TEST.md`，说明启动缓存优先策略及测试数量变化。
+
+### 验证记录
+
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryTests/homeLibraryTests/testStoreRestoresCachedBooksBeforeRemoteRepositoryListCompletes test` 通过
+- `xcodebuild -project homeLibrary.xcodeproj -scheme homeLibrary -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:homeLibraryTests test` 通过
+  - `homeLibraryTests.xctest` 共执行 `51` 个测试，其中 `1` 个 CloudKit live 测试按预期跳过，其余全部通过
+
+## 2026-05-04（记录版本号位置）
+
+- 记录应用版本号维护位置：用户可见版本号在 `homeLibrary.xcodeproj/project.pbxproj` 的 `homeLibrary` target Debug / Release 配置中，字段为 `MARKETING_VERSION`；构建号在同一位置，字段为 `CURRENT_PROJECT_VERSION`。
+- 本次一并纳入当前工作区已有的版本号调整：`MARKETING_VERSION = 1.2.2`。

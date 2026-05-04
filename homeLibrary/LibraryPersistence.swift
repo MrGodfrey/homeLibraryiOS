@@ -385,6 +385,14 @@ nonisolated struct LibraryCacheStore: Sendable {
         return LibraryCacheSnapshot(locations: locations, books: books)
     }
 
+    nonisolated func loadSnapshotIfAvailable(repositoryID: String) throws -> LibraryCacheSnapshot? {
+        guard cacheSnapshotExists(repositoryID: repositoryID) else {
+            return nil
+        }
+
+        return try loadSnapshot(repositoryID: repositoryID)
+    }
+
     @discardableResult
     nonisolated func upsert(book: Book, coverData: Data?, repositoryID: String) throws -> Book {
         try prepareForUse(repositoryID: repositoryID)
@@ -607,6 +615,21 @@ nonisolated struct LibraryCacheStore: Sendable {
     nonisolated private func writeManifest(_ manifest: LibraryCacheManifest, for repositoryID: String) throws {
         let data = try LibraryJSONCodec.makeEncoder().encode(manifest)
         try data.write(to: manifestURL(for: repositoryID), options: [.atomic])
+    }
+
+    nonisolated private func cacheSnapshotExists(repositoryID: String) -> Bool {
+        let fileManager = FileManager.default
+
+        guard fileManager.fileExists(atPath: repositoryRootURL(for: repositoryID).path) else {
+            return false
+        }
+
+        if fileManager.fileExists(atPath: manifestURL(for: repositoryID).path) ||
+            fileManager.fileExists(atPath: locationsURL(for: repositoryID).path) {
+            return true
+        }
+
+        return ((try? jsonFiles(in: booksDirectoryURL(for: repositoryID))) ?? []).isEmpty == false
     }
 
     nonisolated private func mutateManifest(
