@@ -1,4 +1,5 @@
 homeLibrary/SeedBooks.json
 .derived
+.build
 *.p8
 markdownNote/test

@@ -535,3 +535,191 @@
 - 已通过 OpenAI Codex manual 本地缓存读取 Goal mode、approval / sandbox、non-interactive mode 和 auto-review 相关段落。
 - 本次仅更新方案文档与变更记录，未改动应用代码。
 - 未读取 `markdownNote/test`。
+
+## 2026-06-22（实现 home-library-cloudkit CLI 与 home-library-curator Skill）
+
+- 新增 SwiftPM CLI 产品 `home-library-cloudkit`：支持 `doctor`、`repos`、`export-ai-workspace`、`validate-patch`、`review-patch`、`apply-patch`，stdout 输出 JSON，默认工作产物写入 `.derived/AIWorkflow/`。
+- 新增 CLI domain / remote / patch / review / workspace 层：实现与当前 App 对齐的 `Book`、`BookPayload`、`LibraryLocation`、`LibraryRepositoryReference`、CloudKit record type / field / record name、`coverAssetID = cover-<sha256>`、最长边 `720 px` / 目标 `220 KB` 封面压缩、`coverAsset` / `CKAsset` 写入、删除 `book.<id>` record 语义。
+- 新增 `.homelibpatch` schema：覆盖 `createBook`、`updateBook`、`updateBookCover`、`removeBookCover`、`deleteBook`，支持 `fillIfEmpty`、`replaceIfCurrentValue`、`expectedUpdatedAt`、`expectedRecordChangeTag`、`expectedCurrentCoverAssetID`、重复 ISBN、相似标题、封面 payload 校验、partial result、conflict / skipped / failed 分类。
+- 新增 memory remote 与 apply 流程：默认测试不访问 CloudKit，覆盖 create / update / update cover / remove cover / delete / conflict / repeated apply。
+- 新增本地 review server：只绑定 `127.0.0.1`，使用一次性 token，支持 GET review page / raw JSON、POST approve / reject、timeout rejected，并写入 `ReviewDecision.json`。
+- 新增 AI workspace export：生成 `manifest.json`、`LibrarySnapshot.json`、`MissingMetadataReport.json`、`DuplicateCandidates.json`、`CoverStatus.json`、`Locations.json`、`PatchSchema.json`、`README.md`、`LibraryImport.json`。
+- 新增 `scripts/build_home_library_cloudkit.sh`：默认构建可本地测试的 ad-hoc CLI；设置 `HOME_LIBRARY_CODESIGN_IDENTITY` 时用 `home-library-cloudkit/home-library-cloudkit.entitlements` 签 CloudKit entitlement。
+- 新增 Codex Skill `skills/home-library-curator/SKILL.md`：固定通过 CLI 执行 doctor / repos / export / validate / review / apply，明确不读取 `markdownNote/test`、不直接改 CloudKit 或 cache、不绕过 validator，高风险操作必须 review。
+- 更新 `README.md`：补充 CLI 命令、AI workspace、patch 操作、Skill、默认 memory 测试入口、真实 CloudKit 签名和 live 验收限制。
+- 更新 `.gitignore`：忽略 SwiftPM `.build` 产物，继续保持 `.derived` 与 `markdownNote/test` 忽略。
+
+### 验证记录
+
+- `swift build --product home-library-cloudkit` 通过。
+- `swift test` 通过：`HomeLibraryCloudKitTests` 共 `9` 个测试全部通过。
+- `scripts/build_home_library_cloudkit.sh` 通过，生成 `.build/debug/home-library-cloudkit`。
+- `.build/debug/home-library-cloudkit doctor --remote memory` 通过，确认 `.derived` 和 `markdownNote/test` 均被 git ignored。
+- `.build/debug/home-library-cloudkit repos --remote memory` 通过，输出 memory 测试仓库 JSON。
+- `.build/debug/home-library-cloudkit export-ai-workspace --remote memory --repo memory --output .derived/AIWorkflow/CommandWorkspace` 通过。
+- `.build/debug/home-library-cloudkit validate-patch .derived/AIWorkflow/command-smoke.homelibpatch --snapshot .derived/AIWorkflow/CommandWorkspace/LibrarySnapshot.json --result .derived/AIWorkflow/CommandValidation.json` 通过。
+- `.build/debug/home-library-cloudkit review-patch .derived/AIWorkflow/command-smoke.homelibpatch --snapshot .derived/AIWorkflow/CommandWorkspace/LibrarySnapshot.json --result .derived/AIWorkflow/CommandReviewDecision.json --auto-approve-test-only --remote memory` 通过。
+- `.build/debug/home-library-cloudkit apply-patch .derived/AIWorkflow/command-smoke.homelibpatch --remote memory --review-decision .derived/AIWorkflow/CommandReviewDecision.json --result .derived/AIWorkflow/CommandApplyResult.json` 通过。
+- `security find-identity -v -p codesigning` 找到可用的 Apple Development signing identity，但用该 identity 签 CloudKit entitlement 后，在当前 Codex 桌面宿主里执行真实 `doctor` 被 AppleSystemPolicy kill（exit `137`）；`codesign --verify --deep --strict --verbose=4` 和 `spctl --assess --type execute --verbose=4` 均通过静态校验。真实 CloudKit live apply 与 iPhone / 模拟器同步验证因此未能在当前宿主环境完成。
+- 未读取 `markdownNote/test`；真实 workspace、patch、review decision 和 apply result 均生成在已忽略的 `.derived/AIWorkflow/`。
+
+## 2026-06-22（补强 CLI command 测试与 live workflow 入口）
+
+- 收紧 `updateBookCover` 校验规则：已有封面时，patch 如果没有提供 `expectedCurrentCoverAssetID`，现在会跳过而不是进入替换流程；提供但不匹配时返回 conflict，提供且匹配时才允许经 review 替换。
+- 新增黑盒 CLI command 测试：直接运行已构建的 `.build/debug/home-library-cloudkit`，覆盖 stdout JSON、stderr progress、非 0 exit code、`--result` 写文件、默认 `.derived/AIWorkflow/` 输出路径、invalid patch 拦截，以及缺少 review decision 时拒绝高风险删除。
+- 新增受保护命令 `run-live-test`：真实 CloudKit 路径要求 `HOME_LIBRARY_CLOUDKIT_LIVE_TESTS=1`，memory 路径可无人值守覆盖完整 live workflow 等价流程。
+- `run-live-test --remote memory` 现在自动创建测试仓库、保存新增地点、创建带封面的书、更新字段、替换封面、验证旧 patch conflict、移除封面、导出 workspace、删除书籍并清理测试仓库。
+- 更新 `README.md`：补充 `run-live-test` 命令、CLI command 测试范围、SwiftPM 测试数量和当前真实 CloudKit 签名阻塞说明。
+
+### 验证记录
+
+- `swift test` 通过：SwiftPM 测试共 `10` 项全部通过。
+- `scripts/build_home_library_cloudkit.sh` 通过，生成 ad-hoc signed 本地测试 CLI。
+- `.build/debug/home-library-cloudkit run-live-test --remote memory --result .derived/AIWorkflow/MemoryLiveResult.json` 通过，所有 workflow step 均为 `ok: true`，并完成 memory 测试仓库 cleanup。
+- `HOME_LIBRARY_CODESIGN_IDENTITY='<Apple Development signing identity>' scripts/build_home_library_cloudkit.sh && HOME_LIBRARY_CLOUDKIT_LIVE_TESTS=1 HOME_LIBRARY_CLOUDKIT_CONTAINER=iCloud.yu.homeLibrary HOME_LIBRARY_TEST_REPOSITORY_PREFIX=AIWorkflowTest .build/debug/home-library-cloudkit run-live-test --result .derived/AIWorkflow/CloudKitLiveResult.json` 仍在当前 Codex 桌面宿主里被系统 kill，exit `137`，未进入 CLI 逻辑。
+- 随后重新运行 `scripts/build_home_library_cloudkit.sh` 将本地测试 CLI 签回普通 ad-hoc；`codesign --verify --deep --strict --verbose=2 .build/debug/home-library-cloudkit` 通过，`.build/debug/home-library-cloudkit doctor --remote memory` 通过。
+- 未读取 `markdownNote/test`；`.derived/AIWorkflow/MemoryLiveResult.json` 以及真实 live 尝试的结果路径均在已忽略目录下。
+
+## 2026-06-22（确认 CloudKit CLI 签名阻塞边界）
+
+- 继续排查真实 CloudKit live 入口失败原因：本机 Xcode profile 目录存在 provisioning profile，但均为 iOS / visionOS 平台，且只匹配现有 App ID `8VG8636JLY.yu.homeLibrary`。
+- 未发现 macOS 平台 profile，也未发现 `8VG8636JLY.yu.homeLibrary.cloudkit-cli` 对应的 profile；因此带 iCloud restricted entitlement 的 `home-library-cloudkit` 在当前宿主上无法通过 AMFI / AppleSystemPolicy 运行真实 CloudKit 路径。
+- 更新 `README.md`：补充真实 CloudKit live 测试的明确解锁条件，需要安装匹配 CLI bundle identifier 与 `iCloud.yu.homeLibrary` container 的 macOS development provisioning profile，或在已具备该 profile 的宿主环境继续。
+- 未读取 `markdownNote/test`；本次排查未提交任何真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（脱敏 CLI 签名示例与日志）
+
+- 将 `skills/home-library-curator/SKILL.md` 中的真实 signing identity 示例改为占位符，避免把本机账号相关字符串写入仓库。
+- 将本次新增 `log.md` 验证记录中的 signing identity 文本同步改为通用占位符，只保留诊断结论和可复现命令结构。
+- 重新运行 `scripts/build_home_library_cloudkit.sh`，确认生成 ad-hoc signed 本地测试 CLI。
+- 重新运行 `.build/debug/home-library-cloudkit run-live-test --remote memory --result .derived/AIWorkflow/MemoryLiveResult.json`，完整 memory workflow 通过并完成 cleanup。
+- `codesign --verify --deep --strict --verbose=2 .build/debug/home-library-cloudkit` 通过。
+- 未读取 `markdownNote/test`；未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（补强 doctor 签名与 provisioning 诊断）
+
+- 扩展 `home-library-cloudkit doctor` JSON 输出：新增结构化 `codesign` 与 `provisioningProfiles` 诊断，报告当前 executable 的 CloudKit entitlement、container entitlement、目标 application identifier、已搜索 profile 目录、profile 总数、container 匹配数、macOS 平台匹配数和 ready profile 匹配数。
+- `doctor --remote memory` 仍保持可用于默认测试，不访问 CloudKit；真实 CloudKit 模式的 `ok` 现在要求账号可用、CloudKit entitlement、目标 container entitlement 与匹配 macOS provisioning profile 都满足。
+- 更新 CLI command 测试：黑盒检查 `doctor` 输出包含 codesign / provisioning JSON 结构和 `iCloud.yu.homeLibrary` 目标 container。
+- 更新 `README.md`：记录 `doctor` 的签名和 provisioning profile 诊断能力。
+- 验证：`swift build --product home-library-cloudkit` 通过；`swift test` 通过，SwiftPM 测试共 `10` 项全部通过。
+- 未读取 `markdownNote/test`；未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（补充 Skill workflow 自动化测试）
+
+- 新增 `SkillWorkflowTests`：读取 `skills/home-library-curator/SKILL.md`，校验 Skill 文档包含 `doctor`、`repos`、`export-ai-workspace`、`validate-patch`、`review-patch`、`apply-patch` 标准 CLI workflow。
+- 同一测试覆盖 Skill 安全规则：禁止读取 `markdownNote/test`、禁止直接改 `cloudkit-cache`、禁止直接调用 CloudKit、禁止绕过 validator、高风险操作必须 review、test-only auto approval 只允许 memory 或 `AIWorkflowTest-*`。
+- 更新 `README.md`：SwiftPM 测试数量从 `10` 增至 `11`，仓库总 XCTest / SwiftPM XCTest 数量从 `69` 增至 `70`。
+- 验证：`swift test` 通过，SwiftPM 测试共 `11` 项全部通过。
+- 未读取 `markdownNote/test`；未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（补齐 retryableFailed 分类）
+
+- 调整 `LibraryAIPatchApplier`：对 CloudKit 的 `networkUnavailable`、`networkFailure`、`serviceUnavailable`、`requestRateLimited`、`zoneBusy`、`limitExceeded`、`serverResponseLost`、`operationCancelled` 等临时错误返回 `retryableFailed`，并在 per-operation result 中设置 `retryable: true`。
+- 新增 `testRetryableCloudKitFailureClassification`：用测试 remote 抛出 `CKError(.networkUnavailable)`，验证 apply result 的 `failedCount == 0`、`retryableFailedCount == 1`、operation status 为 `retryableFailed`。
+- 更新 `README.md`：SwiftPM 测试数量从 `11` 增至 `12`，仓库总 XCTest / SwiftPM XCTest 数量从 `70` 增至 `71`，补充 retryable apply result 覆盖。
+- 验证：`swift test` 通过，SwiftPM 测试共 `12` 项全部通过。
+- 未读取 `markdownNote/test`；未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（补强 ReviewDecision 写入时机）
+
+- 调整 `PatchReviewServer.complete`：approve / reject / timeout 完成路径会立即写入 `ReviewDecision.json`，`review-patch` 的 `run()` 路径仍保留最终写入，确保测试 server 与产品 server 都能证明 POST 后决策文件落盘。
+- 扩展 review server 测试：POST approve 后读取 `ReviewDecision.json`，校验 `approved` 与 `patchDigest`。
+- 更新 `README.md`：补充 review server approve / reject 会写入 `ReviewDecision.json` 的测试覆盖。
+- 验证：`swift test` 通过，SwiftPM 测试共 `11` 项全部通过。
+- 未读取 `markdownNote/test`；未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（修复 ad-hoc doctor 诊断路径）
+
+- 调整 `home-library-cloudkit doctor` 执行顺序：先读取 codesign entitlement 与本地 provisioning profile 诊断，再决定是否调用 CloudKit account status。
+- 对缺少 CloudKit entitlement 的 ad-hoc executable，`doctor` 现在返回 JSON：`ok: false`、`accountStatus: notCheckedMissingEntitlements`，并输出缺 entitlement / 缺 profile 的 warnings；不再在真实模式下直接触发 CloudKit 运行期 abort。
+- 扩展 CLI command 测试：覆盖不带 `--remote memory` 的 `doctor`，确认缺 entitlement 时仍以 exit `0` 输出结构化失败诊断。
+- 更新 `README.md`：补充 ad-hoc executable 真实模式缺 entitlement 时仍返回 JSON 的测试覆盖。
+- 验证：`swift build --product home-library-cloudkit` 通过；`.build/debug/home-library-cloudkit doctor` 输出结构化失败诊断；`swift test` 通过，SwiftPM 测试共 `11` 项全部通过。
+- 未读取 `markdownNote/test`；未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（修正 AIWorkspace.zip 根目录结构）
+
+- 调整 `AIWorkspaceExporter` 的 zip 生成方式：`.zip` 输出不再保留临时随机父目录，解包后 `manifest.json`、`LibrarySnapshot.json`、`PatchSchema.json` 等必需文件直接位于工作包根目录，符合 `AIWorkspace.zip` 作为工作包的使用预期。
+- 同步更新 workspace export 测试：解包后直接检查 zip 根目录中的全部必需文件。
+- 验证：`swift test` 通过，SwiftPM 测试共 `11` 项全部通过。
+- 未读取 `markdownNote/test`；未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（补强 workspace zip 与 live gate 测试）
+
+- 扩展 workspace export 测试：除目录输出外，新增 `.zip` 输出校验，使用 `ditto -x -k` 解包后确认 `manifest.json`、`LibrarySnapshot.json`、`MissingMetadataReport.json`、`DuplicateCandidates.json`、`CoverStatus.json`、`Locations.json`、`PatchSchema.json`、`README.md`、`LibraryImport.json` 均存在。
+- 扩展 CLI command 测试：强制移除测试进程里的 `HOME_LIBRARY_CLOUDKIT_LIVE_TESTS`，确认不带 `--remote memory` 的 `run-live-test` 会以 exit `2` 拒绝执行并提示需要显式 live test 环境变量，避免默认路径误触真实 CloudKit。
+- 更新 `README.md`：补充 workspace zip 内容验证与 CloudKit live test 环境门禁覆盖。
+- 验证：`swift test` 通过，SwiftPM 测试共 `11` 项全部通过。
+- 未读取 `markdownNote/test`；未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（补强 review server 页面测试）
+
+- 扩展 `HomeLibraryCloudKitTests.testReviewServerApproveRejectWrongTokenAndTimeout`：新增 `/raw.json` GET 校验，确认 review server 可返回原始 patch JSON。
+- 同一测试新增 destructive review 页面覆盖：构造替换非空字段、替换已有封面和删除书籍的 patch，校验 HTML 包含 danger zone、更新 / 封面 / 删除计数、old -> new 提示以及对应风险文案。
+- 验证：`swift test` 通过，SwiftPM 测试共 `11` 项全部通过。
+- 未读取 `markdownNote/test`；未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（补强 CLI CloudKit 增量刷新缓存）
+
+- 调整 `CloudKitLibraryRemote.refreshRepository`：按 database scope、zone owner 和 zone name 缓存上一次 `RemoteRepositorySnapshot` 与 `CKServerChangeToken`，后续真实 CloudKit 刷新会携带 token 拉取增量。
+- 新增增量合并路径：当 CloudKit 返回新增或修改的 location / book record 时覆盖缓存快照，返回删除记录时从缓存快照移除对应地点或图书；token 失效时仍回退完整刷新。
+- 更新 `README.md`：补充 AI 工作流 CLI 真实远端刷新会缓存 zone change token 并合并增量。
+- 验证：`swift test` 通过，SwiftPM 测试共 `12` 项全部通过。
+- 未读取 `markdownNote/test`；未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（AI 工作流 CLI 本地验收）
+
+- 重新运行 `scripts/build_home_library_cloudkit.sh`，确认 `home-library-cloudkit` 可构建；当前未设置 `HOME_LIBRARY_CODESIGN_IDENTITY`，因此仍是 ad-hoc 签名且不具备 CloudKit entitlement。
+- 运行 `.build/debug/home-library-cloudkit doctor`，确认真实 CloudKit 模式会输出结构化签名 / provisioning 失败诊断，而不是直接触发 CloudKit 运行期失败。
+- 运行 `.build/debug/home-library-cloudkit doctor --remote memory`，确认 memory 模式本地诊断通过。
+- 运行 `.build/debug/home-library-cloudkit run-live-test --remote memory --result .derived/AIWorkflow/MemoryLiveResult.json`，完整 memory workflow 通过并完成 cleanup。
+- 运行 `git diff --check`、敏感字符串扫描与 `git check-ignore`，确认 diff 无空白错误、未命中账号 / token / 私钥模式，且 `.derived`、`.build`、`markdownNote/test` 和 live result 文件均被忽略。
+- 未读取 `markdownNote/test`；未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（补强真实 CloudKit 错误分类与命令级 review 测试）
+
+- 为 `CLIError` 增加错误类别，保留真实 CloudKit remote 映射后的临时错误与服务端记录冲突语义，避免 apply 层只能识别原始 `CKError`。
+- `LibraryAIPatchApplier` 现在会把映射后的 CloudKit 临时错误归类为 `retryableFailed`，把映射后的 `serverRecordChanged` 归类为 `conflict`；直接抛出的 `CKError.serverRecordChanged` 也会归类为 `conflict`。
+- `CloudKitLibraryRemote.upsertBook` 的单条 book 保存改用 `ifServerRecordUnchanged` save policy，让真实 CloudKit 更新更接近 expected metadata 冲突保护语义。
+- 扩展 CLI command 测试：覆盖 `review-patch --auto-approve-test-only --remote memory` 写入 `ReviewDecision.json`。
+- 更新 `README.md`：补充真实 CloudKit 映射错误分类和 test-only auto review 的测试覆盖。
+- 验证：`swift test` 通过，SwiftPM 测试共 `12` 项全部通过。
+- 未读取 `markdownNote/test`；未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（清理 Skill 签名占位符并复验）
+
+- 将 `skills/home-library-curator/SKILL.md` 中的 signing identity 示例进一步收敛为通用占位符，避免敏感信息扫描把示例格式误判为真实签名身份。
+- 重新运行 `swift test`，SwiftPM 测试共 `12` 项全部通过。
+- 重新运行真实模式 `doctor`、`doctor --remote memory`、`repos --remote memory` 和 `run-live-test --remote memory`；真实模式仍仅缺 CloudKit entitlement / macOS provisioning profile，memory workflow 通过并完成 cleanup。
+- 未读取 `markdownNote/test`；未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（修正签名构建为 embedded profile app wrapper）
+
+- 扩展 `doctor` 的 provisioning profile 识别：同时枚举 `.mobileprovision` 和 `.provisionprofile`，并兼容 `com.apple.application-identifier` 与 profile 中通配形式的 iCloud services entitlement。
+- 调整 `scripts/build_home_library_cloudkit.sh`：设置 `HOME_LIBRARY_CODESIGN_IDENTITY` 时先查找同时匹配 `8VG8636JLY.yu.homeLibrary.cloudkit-cli` 与 `iCloud.yu.homeLibrary` 的 macOS profile；匹配成功后生成 `.build/<configuration>/home-library-cloudkit.app`，嵌入 profile，并使用 profile 原始 entitlements 签名 wrapper 内 CLI。
+- 签名模式找不到匹配 profile 时会在构建阶段明确失败，不再生成会被 AMFI / AppleSystemPolicy kill 的裸 executable。
+- 当前本机诊断结果：profile 总数 `5`，macOS profile 匹配数 `1`，但 matching application identifier 为 `0`、ready profile 为 `0`；因此用户新安装的 profile 仍不是目标 CLI + target container 组合，真实 CloudKit live test 和 iPhone / 模拟器同步验证未能继续。
+- 更新 `README.md` 和 `skills/home-library-curator/SKILL.md`：记录真实 CloudKit 签名模式应使用构建脚本 stdout 返回的 wrapper 内 executable 路径。
+- 验证：`bash -n scripts/build_home_library_cloudkit.sh` 通过；`swift test` 通过，SwiftPM 测试共 `12` 项全部通过；默认 ad-hoc 构建通过；签名构建在缺匹配 profile 时按预期失败并输出明确错误；`run-live-test --remote memory` 通过并完成 cleanup。
+- 未读取 `markdownNote/test`；未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（Goal 续跑签名阻塞复核）
+
+- 重新读取 `goal.md` 并复查当前工作树，确认剩余未完成验收项仍是真实 CloudKit live test 与 iPhone / 模拟器同步验证。
+- 运行 `.build/debug/home-library-cloudkit doctor`，当前诊断仍为 `profileCount = 5`、`matchingMacOSPlatformCount = 1`、`matchingApplicationIdentifierCount = 0`、`matchingReadyProfileCount = 0`，即本机已有 macOS profile，但没有匹配目标 CLI application identifier 与 `iCloud.yu.homeLibrary` container 的 ready profile。
+- 运行签名构建：`HOME_LIBRARY_CODESIGN_IDENTITY=<identity hash> scripts/build_home_library_cloudkit.sh` 按预期在构建阶段失败，错误明确指出缺少 `8VG8636JLY.yu.homeLibrary.cloudkit-cli` + `iCloud.yu.homeLibrary` 的 macOS provisioning profile。
+- 运行 `swift test`，SwiftPM 测试共 `12` 项全部通过。
+- 结论：代码、默认测试、memory workflow、签名诊断和安全边界已推进到可自动验证范围；真实 CloudKit live test 与 iPhone / 模拟器同步验证仍被 Apple Developer provisioning 外部条件阻塞，剩余最小人工动作是安装匹配目标 App ID 和 container 的 macOS development provisioning profile。
+- 未读取 `markdownNote/test`；未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（真实 CloudKit 与模拟器同步验收通过）
+
+- 在本机安装匹配 `8VG8636JLY.yu.homeLibrary.cloudkit-cli` 与 `iCloud.yu.homeLibrary` 的 macOS provisioning profile 后，签名构建的 `home-library-cloudkit` 通过 `doctor`：CloudKit entitlement、container entitlement、ready profile 与 iCloud account status 均可用。
+- 调整签名构建脚本：签名模式会生成 embedded profile app wrapper，并把 profile 中不适合 macOS CLI 运行时的 iCloud entitlement 规范化为 CloudKit 服务与目标 container，避免运行时被 entitlement 形态拒绝。
+- 修正真实 CloudKit record name 前缀解析：只移除一次 `location.` / `book.` 前缀，避免 `location.location.aiworkflow` 被错误还原为 `aiworkflow`；新增对应 SwiftPM 单测。
+- 为 iOS app 增加自动化命令 `verify-repository-book`，可在指定仓库中刷新 CloudKit 并确认 app 侧读取到指定测试书籍。
+- 扩展真实 `run-live-test`：设置 `HOME_LIBRARY_TEST_SIMULATOR_NAME` 时，会构建并安装 iOS app 到 booted 模拟器，在 CLI 写入测试书后执行 app 侧同步可见性验证，然后继续封面替换、冲突、移除封面、workspace export、删除书籍和清理测试仓库。
+- 更新 `README.md` 与 `skills/home-library-curator/SKILL.md`：记录真实 CloudKit live test 的签名 CLI、模拟器验证环境变量与当前测试覆盖状态。
+- 验证：`swift test` 通过，SwiftPM 测试共 `13` 项全部通过；`bash -n scripts/build_home_library_cloudkit.sh` 通过；XcodeBuildMCP `build_run_sim` 在 `iPhone 17 Pro` 模拟器上通过；签名 `doctor` 通过；真实 `run-live-test` 通过并包含 `verifySimulatorVisibility`，测试仓库已 cleanup。
+- 未读取 `markdownNote/test`；真实 workspace、CloudKit live result 与模拟器自动化结果均留在已忽略的 `.derived/AIWorkflow/` 或模拟器 data container 中；未提交真实账号、snapshot、patch、token 或 Apple ID 信息。

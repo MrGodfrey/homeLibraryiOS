@@ -29,6 +29,7 @@ enum CloudKitDualSimulatorAutomation {
         case ownerVerifyDelete = "owner-verify-delete"
         case ownerCleanup = "owner-cleanup"
         case memberVerifyCleanup = "member-verify-cleanup"
+        case verifyRepositoryBook = "verify-repository-book"
     }
 
     private struct ResultPayload: Codable {
@@ -130,6 +131,8 @@ enum CloudKitDualSimulatorAutomation {
             return try await runOwnerCleanup(service: service, environment: environment)
         case .memberVerifyCleanup:
             return try await runMemberVerifyCleanup(service: service, environment: environment)
+        case .verifyRepositoryBook:
+            return try await runVerifyRepositoryBook(store: store, service: service, environment: environment)
         }
     }
 
@@ -480,6 +483,55 @@ enum CloudKitDualSimulatorAutomation {
             bookTitle: nil,
             bookCount: nil,
             observedBookTitles: [],
+            completedAt: .now
+        )
+    }
+
+    private static func runVerifyRepositoryBook(
+        store: LibraryStore,
+        service: CloudKitLibraryService,
+        environment: [String: String]
+    ) async throws -> ResultPayload {
+        let repositoryName = try requiredValue(for: EnvironmentKey.repositoryName, in: environment)
+        let expectedTitle = try requiredValue(for: EnvironmentKey.initialTitle, in: environment)
+        let expectedBookID = environment[EnvironmentKey.bookID]?.nilIfEmpty
+        let zoneName = environment[EnvironmentKey.zoneName]?.nilIfEmpty
+
+        let repository = try await waitForRepository(
+            service: service,
+            repositoryName: repositoryName,
+            zoneName: zoneName,
+            role: .owner,
+            scope: .private,
+            description: "app 侧定位 CLI 测试仓库",
+            timeout: 120
+        )
+
+        await store.switchRepository(to: repository)
+
+        let visibleBook = try await poll(description: "app 侧读取 CLI 写入书籍", timeout: 150, interval: 2) {
+            await store.loadBooks(force: true)
+            return store.books.first { book in
+                if let expectedBookID {
+                    return book.id == expectedBookID && book.title == expectedTitle
+                }
+
+                return book.title == expectedTitle
+            }
+        }
+
+        return ResultPayload(
+            command: Command.verifyRepositoryBook.rawValue,
+            success: true,
+            message: "app 已读取到 CLI 写入的书籍。",
+            repositoryID: repository.id,
+            repositoryName: repository.name,
+            zoneName: repository.zoneName,
+            shareURL: nil,
+            bookID: visibleBook.id,
+            bookTitle: visibleBook.title,
+            bookCount: store.books.count,
+            observedBookTitles: store.books.map(\.title),
             completedAt: .now
         )
     }

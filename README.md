@@ -226,6 +226,9 @@
 - 应用图标：主屏幕图标资源统一由 `homeLibrary/Assets.xcassets/AppIcon.appiconset` 管理，当前已切换到新的图标稿
 - iCloud 容器：`iCloud.yu.homeLibrary`
 - 默认运行方式：真实环境走 iCloud 云同步，测试默认走内存远端
+- 本地 AI 工作流 CLI：根目录 `Package.swift` 构建 `home-library-cloudkit`，默认输出 JSON，默认产物写入 `.derived/AIWorkflow/`
+- CLI 构建入口：`scripts/build_home_library_cloudkit.sh`；真实 CloudKit 访问需要通过 `HOME_LIBRARY_CODESIGN_IDENTITY` 指定 Apple signing identity，脚本会生成带 embedded provisioning profile 的 `.app` wrapper，并输出 wrapper 内的 CLI 可执行路径
+- Codex Skill：`skills/home-library-curator/SKILL.md`，用于约束 Codex 通过 CLI 执行 `doctor -> repos -> export-ai-workspace -> validate-patch -> review-patch -> apply-patch`
 
 ### 7.2 整体模型
 
@@ -414,9 +417,34 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 当前导出统一为 zip，压缩包内只有一个 `LibraryImport.json`，封面数据会内嵌进去，便于后续重新导入。
 导出过程中，仓库设置页会弹出一个类似 alert 的进度层，提示当前正在整理数据并生成 ZIP，导出完成后再自动打开系统共享。
 
+AI 工作流额外提供一个本地 Swift CLI：
+
+```bash
+scripts/build_home_library_cloudkit.sh
+.build/debug/home-library-cloudkit doctor
+.build/debug/home-library-cloudkit repos
+.build/debug/home-library-cloudkit export-ai-workspace --repo <repo-id> --output .derived/AIWorkflow/AIWorkspace.zip
+.build/debug/home-library-cloudkit validate-patch .derived/AIWorkflow/suggested.homelibpatch --repo <repo-id>
+.build/debug/home-library-cloudkit review-patch .derived/AIWorkflow/suggested.homelibpatch --repo <repo-id> --result .derived/AIWorkflow/ReviewDecision.json
+.build/debug/home-library-cloudkit apply-patch .derived/AIWorkflow/suggested.homelibpatch --review-decision .derived/AIWorkflow/ReviewDecision.json --result .derived/AIWorkflow/ApplyResult.json
+.build/debug/home-library-cloudkit run-live-test --remote memory --result .derived/AIWorkflow/MemoryLiveResult.json
+```
+
+`export-ai-workspace` 会生成 `manifest.json`、`LibrarySnapshot.json`、`MissingMetadataReport.json`、`DuplicateCandidates.json`、`CoverStatus.json`、`Locations.json`、`PatchSchema.json`、`README.md` 和 `LibraryImport.json`。默认不会把真实工作包、patch、review decision 或 apply result 提交到仓库；它们应留在已忽略的 `.derived/AIWorkflow/`。
+
+CLI patch 格式为 `.homelibpatch`，当前支持：
+
+- `createBook`
+- `updateBook`
+- `updateBookCover`
+- `removeBookCover`
+- `deleteBook`
+
+高风险操作必须经过 `review-patch` 本机确认页：删除书籍、移除封面、替换已有封面、替换非空字段和低置信度操作都不能静默 apply。默认测试可用 `--remote memory`，不访问 CloudKit；真实 CloudKit 路径需要可运行的 Apple 签名、CloudKit entitlement 和匹配 macOS provisioning profile。签名构建时，`scripts/build_home_library_cloudkit.sh` 会寻找同时匹配 `8VG8636JLY.yu.homeLibrary.cloudkit-cli` 与 `iCloud.yu.homeLibrary` 的 `.mobileprovision` / `.provisionprofile`，生成 `.build/debug/home-library-cloudkit.app/Contents/MacOS/home-library-cloudkit`。CLI 真实远端刷新会按 repository zone 缓存 `CKServerChangeToken`，后续刷新只拉取增量并合并新增、修改和删除记录。`doctor` 会输出 `codesign` 与 `provisioningProfiles` 诊断，检查当前 executable 的 CloudKit entitlement、目标 container、已安装 provisioning profile 数量、macOS profile 匹配数以及是否存在同时匹配 CLI application identifier 和 `iCloud.yu.homeLibrary` 的 profile。真实 `run-live-test` 在设置 `HOME_LIBRARY_TEST_SIMULATOR_NAME` 时会构建并安装 iOS app 到该 booted 模拟器，验证 CLI 写入的 `AIWorkflowTest-*` 测试书籍可被 app 侧 CloudKit 同步读取，然后继续删除书籍并清理测试仓库。
+
 ### 7.7 测试覆盖
 
-当前仓库共有 **59 个 XCTest**，外加 **1 个双模拟器共享验证脚本**。
+当前仓库共有 **72 个 XCTest / SwiftPM XCTest**，外加 **1 个双模拟器共享验证脚本**。
 
 #### 7.7.1 单元与状态管理测试
 
@@ -514,7 +542,55 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 
 这不是默认 XCTest 的一部分，但对多人协作主线非常重要。
 
-#### 7.7.6 当前仍主要依赖手动验收的部分
+#### 7.7.6 AI 工作流 CLI 测试
+
+`Tests/HomeLibraryCloudKitTests` 当前包含 **13 个 SwiftPM XCTest**，默认不访问 CloudKit，覆盖：
+
+- `.homelibpatch` 解码与 schemaVersion
+- target repository、operation 数量和 patch 大小限制
+- ISBN、locationID、重复 ISBN、相似标题
+- CloudKit record name 前缀解析，确保包含 `location.` 等域名式 ID 的地点不会被截断
+- `fillIfEmpty`、`replaceIfCurrentValue`
+- `expectedUpdatedAt` 与 `expectedRecordChangeTag`
+- apply result 的 `retryableFailed` / CloudKit conflict 分类与 `retryable` 标记，包括真实 CloudKit remote 映射后的错误类别
+- 封面 payload 解码、压缩、`coverAssetID = cover-<sha256>`
+- `deleteBook` 与 `removeBookCover` 需要 review approval
+- memory remote 的 create/update/update cover/remove cover/delete、冲突、重复 apply
+- cache 中图书 metadata 与 `covers/<coverAssetID>.bin` 分离
+- workspace export 与 `LibraryImportBook.coverData`，并验证 `.zip` 工作包可解包且包含全部必需文件
+- review server 只绑定 `127.0.0.1`、错误 token 拒绝、GET 页面与 raw JSON、danger zone、替换非空字段、替换封面、删除摘要、approve/reject 写入 `ReviewDecision.json`、timeout
+- CLI command 级 stdout JSON、stderr progress、非 0 exit、`--result` 文件、默认 `.derived/AIWorkflow/` 路径、`doctor` codesign / provisioning JSON 诊断、ad-hoc executable 真实模式缺 entitlement 时仍返回 JSON、test-only auto review 写入 `ReviewDecision.json`、CloudKit live test 环境门禁、缺 review decision 的高风险 apply 拒绝
+- `run-live-test --remote memory` 的完整 live workflow 等价路径：创建测试仓库、保存地点、带封面新增、字段更新、封面替换、旧 patch 冲突、移除封面、workspace export、删除书籍和清理仓库
+- 真实 `run-live-test` 可在 `HOME_LIBRARY_TEST_SIMULATOR_NAME` 指向 booted 模拟器时额外执行 app 侧同步可见性验证
+- `home-library-curator` Skill 文件中的 CLI workflow、`markdownNote/test` 禁读、禁止直接改 cache / CloudKit、必须 validate、review gate 与 test-only auto approval 规则
+
+本地命令级 smoke 可使用：
+
+```bash
+swift test
+scripts/build_home_library_cloudkit.sh
+.build/debug/home-library-cloudkit doctor --remote memory
+.build/debug/home-library-cloudkit repos --remote memory
+.build/debug/home-library-cloudkit export-ai-workspace --remote memory --repo memory --output .derived/AIWorkflow/CommandWorkspace
+.build/debug/home-library-cloudkit run-live-test --remote memory --result .derived/AIWorkflow/MemoryLiveResult.json
+```
+
+真实 CloudKit live 测试需要带 CloudKit entitlement 的签名 CLI、当前 Mac 已登录可用 iCloud 账号，以及 iPhone 或 `iPhone 17 Pro` 模拟器登录同一个账号。`doctor` 的 `matchingReadyProfileCount` 必须大于 `0`；如果只有 `matchingMacOSPlatformCount` 大于 `0`，但 `matchingApplicationIdentifierCount` 或 `matchingContainerCount` 不匹配，说明已安装的 macOS profile 不是 `8VG8636JLY.yu.homeLibrary.cloudkit-cli` + `iCloud.yu.homeLibrary` 这一组。设置 `HOME_LIBRARY_TEST_SIMULATOR_NAME` 后，真实 live test 会在清理测试仓库前启动 app 自动化命令 `verify-repository-book`，确认模拟器 app 读取到 CLI 写入的书籍。
+
+签名模式应使用构建脚本输出的 executable 路径，而不是裸 SwiftPM 产物路径：
+
+```bash
+CLI_BIN="$(HOME_LIBRARY_CODESIGN_IDENTITY="<Apple signing identity>" scripts/build_home_library_cloudkit.sh)"
+"$CLI_BIN" doctor
+HOME_LIBRARY_CLOUDKIT_LIVE_TESTS=1 \
+HOME_LIBRARY_CLOUDKIT_CONTAINER=iCloud.yu.homeLibrary \
+HOME_LIBRARY_TEST_REPOSITORY_PREFIX=AIWorkflowTest \
+HOME_LIBRARY_TEST_SIMULATOR_NAME="iPhone 17 Pro" \
+HOME_LIBRARY_REPO_ROOT="$PWD" \
+"$CLI_BIN" run-live-test --result .derived/AIWorkflow/CloudKitLiveResult.json
+```
+
+#### 7.7.7 当前仍主要依赖手动验收的部分
 
 自动化测试之外，目前仍更适合手动验收的内容包括：
 
@@ -522,6 +598,8 @@ Application Support/homeLibrary/<namespace>/cloudkit-cache/<repository-id>/
 - 系统分享面板的完整私有邀请流程
 - 更复杂的异常文件导入场景
 - 大数据量和极端并发下的体验验证
+- 带 CloudKit entitlement 的 `home-library-cloudkit` 在非 Codex 宿主环境中的真实账号复测
+- 物理 iPhone 上的真实设备同步体验复测
 
 ## 8. 预期实现的其他功能
 
