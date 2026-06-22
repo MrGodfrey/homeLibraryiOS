@@ -8,6 +8,15 @@ BUNDLE_ID="yu.homeLibrary.cloudkit-cli"
 TEAM_ID="8VG8636JLY"
 APP_IDENTIFIER="$TEAM_ID.$BUNDLE_ID"
 CONTAINER_ID="iCloud.yu.homeLibrary"
+CLOUDKIT_ENVIRONMENT="${HOME_LIBRARY_CLOUDKIT_ENVIRONMENT:-production}"
+CLOUDKIT_ENVIRONMENT="$(printf '%s' "$CLOUDKIT_ENVIRONMENT" | tr '[:upper:]' '[:lower:]')"
+case "$CLOUDKIT_ENVIRONMENT" in
+  production|development) ;;
+  *)
+    printf '%s\n' "error: HOME_LIBRARY_CLOUDKIT_ENVIRONMENT must be production or development." >&2
+    exit 2
+    ;;
+esac
 
 find_matching_profile() {
   local target_app_id="$1"
@@ -59,6 +68,11 @@ profile_matches() {
 
 normalize_entitlements() {
   local path="$1"
+  local cloudkit_environment="$2"
+  local entitlement_environment="Production"
+  if [[ "$cloudkit_environment" == "development" ]]; then
+    entitlement_environment="Development"
+  fi
 
   /usr/libexec/PlistBuddy -c 'Delete :application-identifier' "$path" 2>/dev/null || true
 
@@ -77,6 +91,13 @@ normalize_entitlements() {
   /usr/libexec/PlistBuddy -c "Add :com.apple.developer.icloud-container-identifiers:0 string $CONTAINER_ID" "$path"
 
   /usr/libexec/PlistBuddy -c 'Delete :com.apple.developer.icloud-container-environment' "$path" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Add :com.apple.developer.icloud-container-environment string $entitlement_environment" "$path"
+
+  /usr/libexec/PlistBuddy -c 'Delete :com.apple.developer.icloud-container-development-container-identifiers' "$path" 2>/dev/null || true
+  if [[ "$cloudkit_environment" == "development" ]]; then
+    /usr/libexec/PlistBuddy -c 'Add :com.apple.developer.icloud-container-development-container-identifiers array' "$path"
+    /usr/libexec/PlistBuddy -c "Add :com.apple.developer.icloud-container-development-container-identifiers:0 string $CONTAINER_ID" "$path"
+  fi
 }
 
 write_info_plist() {
@@ -124,7 +145,7 @@ if [[ -n "$IDENTITY" ]]; then
 
   security cms -D -i "$PROFILE" > "$PROFILE_PLIST"
   /usr/libexec/PlistBuddy -x -c 'Print :Entitlements' "$PROFILE_PLIST" > "$RESOLVED_ENTITLEMENTS"
-  normalize_entitlements "$RESOLVED_ENTITLEMENTS"
+  normalize_entitlements "$RESOLVED_ENTITLEMENTS" "$CLOUDKIT_ENVIRONMENT"
 
   rm -rf "$APP"
   mkdir -p "$APP/Contents/MacOS"

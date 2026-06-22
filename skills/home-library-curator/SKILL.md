@@ -30,10 +30,12 @@ Use this skill to manage a `homeLibrary` CloudKit repository through the local C
    For real CloudKit access, set an Apple signing identity:
 
    ```bash
-   CLI_BIN="$(HOME_LIBRARY_CODESIGN_IDENTITY="<Apple signing identity>" scripts/build_home_library_cloudkit.sh)"
+   CLI_BIN="$(HOME_LIBRARY_CODESIGN_IDENTITY="<Apple signing identity>" HOME_LIBRARY_CLOUDKIT_ENVIRONMENT=production scripts/build_home_library_cloudkit.sh)"
    ```
 
-   In signed mode, use the executable path printed by the script. It may be inside `.build/debug/home-library-cloudkit.app/Contents/MacOS/` because macOS restricted CloudKit entitlements require an embedded provisioning profile.
+   In signed mode, use the executable path printed by the script. It may be inside `.build/debug/home-library-cloudkit.app/Contents/MacOS/` because macOS restricted CloudKit entitlements require an embedded provisioning profile. Production is the default and is required for the user's release iPhone library; use `HOME_LIBRARY_CLOUDKIT_ENVIRONMENT=development` only for explicitly isolated tests.
+
+   Do not run multiple signed CLI builds or commands in parallel. The signed wrapper is rebuilt in place.
 
 2. Run doctor:
 
@@ -105,11 +107,12 @@ Use this skill to manage a `homeLibrary` CloudKit repository through the local C
 11. For protected real CloudKit verification, use a signed CLI and an isolated test repository prefix:
 
     ```bash
-    HOME_LIBRARY_CLOUDKIT_LIVE_TESTS=1 \
-    HOME_LIBRARY_CLOUDKIT_CONTAINER=iCloud.yu.homeLibrary \
-    HOME_LIBRARY_TEST_REPOSITORY_PREFIX=AIWorkflowTest \
-    HOME_LIBRARY_TEST_SIMULATOR_NAME="iPhone 17 Pro" \
-    HOME_LIBRARY_REPO_ROOT="$PWD" \
+   HOME_LIBRARY_CLOUDKIT_LIVE_TESTS=1 \
+   HOME_LIBRARY_CLOUDKIT_CONTAINER=iCloud.yu.homeLibrary \
+   HOME_LIBRARY_CLOUDKIT_ENVIRONMENT=production \
+   HOME_LIBRARY_TEST_REPOSITORY_PREFIX=AIWorkflowTest \
+   HOME_LIBRARY_TEST_SIMULATOR_NAME="iPhone 17 Pro" \
+   HOME_LIBRARY_REPO_ROOT="$PWD" \
     "$CLI_BIN" run-live-test --result .derived/AIWorkflow/CloudKitLiveResult.json
     ```
 

@@ -227,7 +227,7 @@
 - iCloud 容器：`iCloud.yu.homeLibrary`
 - 默认运行方式：真实环境走 iCloud 云同步，测试默认走内存远端
 - 本地 AI 工作流 CLI：根目录 `Package.swift` 构建 `home-library-cloudkit`，默认输出 JSON，默认产物写入 `.derived/AIWorkflow/`
-- CLI 构建入口：`scripts/build_home_library_cloudkit.sh`；真实 CloudKit 访问需要通过 `HOME_LIBRARY_CODESIGN_IDENTITY` 指定 Apple signing identity，脚本会生成带 embedded provisioning profile 的 `.app` wrapper，并输出 wrapper 内的 CLI 可执行路径
+- CLI 构建入口：`scripts/build_home_library_cloudkit.sh`；真实 CloudKit 访问需要通过 `HOME_LIBRARY_CODESIGN_IDENTITY` 指定 Apple signing identity，脚本会生成带 embedded provisioning profile 的 `.app` wrapper，并输出 wrapper 内的 CLI 可执行路径。脚本默认签到 Production CloudKit；测试隔离需要显式设置 `HOME_LIBRARY_CLOUDKIT_ENVIRONMENT=development`
 - Codex Skill：`skills/home-library-curator/SKILL.md`，用于约束 Codex 通过 CLI 执行 `doctor -> repos -> export-ai-workspace -> validate-patch -> review-patch -> apply-patch`
 
 ### 7.2 整体模型
@@ -440,7 +440,7 @@ CLI patch 格式为 `.homelibpatch`，当前支持：
 - `removeBookCover`
 - `deleteBook`
 
-高风险操作必须经过 `review-patch` 本机确认页：删除书籍、移除封面、替换已有封面、替换非空字段和低置信度操作都不能静默 apply。默认测试可用 `--remote memory`，不访问 CloudKit；真实 CloudKit 路径需要可运行的 Apple 签名、CloudKit entitlement 和匹配 macOS provisioning profile。签名构建时，`scripts/build_home_library_cloudkit.sh` 会寻找同时匹配 `8VG8636JLY.yu.homeLibrary.cloudkit-cli` 与 `iCloud.yu.homeLibrary` 的 `.mobileprovision` / `.provisionprofile`，生成 `.build/debug/home-library-cloudkit.app/Contents/MacOS/home-library-cloudkit`。CLI 真实远端刷新会按 repository zone 缓存 `CKServerChangeToken`，后续刷新只拉取增量并合并新增、修改和删除记录。`doctor` 会输出 `codesign` 与 `provisioningProfiles` 诊断，检查当前 executable 的 CloudKit entitlement、目标 container、已安装 provisioning profile 数量、macOS profile 匹配数以及是否存在同时匹配 CLI application identifier 和 `iCloud.yu.homeLibrary` 的 profile。真实 `run-live-test` 在设置 `HOME_LIBRARY_TEST_SIMULATOR_NAME` 时会构建并安装 iOS app 到该 booted 模拟器，验证 CLI 写入的 `AIWorkflowTest-*` 测试书籍可被 app 侧 CloudKit 同步读取，然后继续删除书籍并清理测试仓库。
+高风险操作必须经过 `review-patch` 本机确认页：删除书籍、移除封面、替换已有封面、替换非空字段和低置信度操作都不能静默 apply。默认测试可用 `--remote memory`，不访问 CloudKit；真实 CloudKit 路径需要可运行的 Apple 签名、CloudKit entitlement 和匹配 macOS provisioning profile。签名构建时，`scripts/build_home_library_cloudkit.sh` 会寻找同时匹配 `8VG8636JLY.yu.homeLibrary.cloudkit-cli` 与 `iCloud.yu.homeLibrary` 的 `.mobileprovision` / `.provisionprofile`，生成 `.build/debug/home-library-cloudkit.app/Contents/MacOS/home-library-cloudkit`。签名脚本默认使用 Production CloudKit，并移除 development container entitlement；需要访问 Development 测试库时必须显式设置 `HOME_LIBRARY_CLOUDKIT_ENVIRONMENT=development`。CLI 真实远端刷新会按 repository zone 缓存 `CKServerChangeToken`，后续刷新只拉取增量并合并新增、修改和删除记录。`doctor` 会输出 `codesign` 与 `provisioningProfiles` 诊断，检查当前 executable 的 CloudKit entitlement、目标 container、CloudKit environment、development container entitlement、已安装 provisioning profile 数量、macOS profile 匹配数以及是否存在同时匹配 CLI application identifier 和 `iCloud.yu.homeLibrary` 的 profile。真实 `run-live-test` 在设置 `HOME_LIBRARY_TEST_SIMULATOR_NAME` 时会构建并安装 iOS app 到该 booted 模拟器，验证 CLI 写入的 `AIWorkflowTest-*` 测试书籍可被 app 侧 CloudKit 同步读取，然后继续删除书籍并清理测试仓库。
 
 ### 7.7 测试覆盖
 
@@ -575,15 +575,16 @@ scripts/build_home_library_cloudkit.sh
 .build/debug/home-library-cloudkit run-live-test --remote memory --result .derived/AIWorkflow/MemoryLiveResult.json
 ```
 
-真实 CloudKit live 测试需要带 CloudKit entitlement 的签名 CLI、当前 Mac 已登录可用 iCloud 账号，以及 iPhone 或 `iPhone 17 Pro` 模拟器登录同一个账号。`doctor` 的 `matchingReadyProfileCount` 必须大于 `0`；如果只有 `matchingMacOSPlatformCount` 大于 `0`，但 `matchingApplicationIdentifierCount` 或 `matchingContainerCount` 不匹配，说明已安装的 macOS profile 不是 `8VG8636JLY.yu.homeLibrary.cloudkit-cli` + `iCloud.yu.homeLibrary` 这一组。设置 `HOME_LIBRARY_TEST_SIMULATOR_NAME` 后，真实 live test 会在清理测试仓库前启动 app 自动化命令 `verify-repository-book`，确认模拟器 app 读取到 CLI 写入的书籍。
+真实 CloudKit live 测试需要带 CloudKit entitlement 的签名 CLI、当前 Mac 已登录可用 iCloud 账号，以及 iPhone 或 `iPhone 17 Pro` 模拟器登录同一个账号。`doctor` 的 `matchingReadyProfileCount` 必须大于 `0`，且 `codesign.hasExpectedCloudKitEnvironment` 必须为 `true`；面向发布版实体 iPhone 的真实书库时应显示 `environment = Production`、`iCloudContainerEnvironments = ["Production"]`，并且 `iCloudDevelopmentContainerIdentifiers` 为空。如果只有 `matchingMacOSPlatformCount` 大于 `0`，但 `matchingApplicationIdentifierCount` 或 `matchingContainerCount` 不匹配，说明已安装的 macOS profile 不是 `8VG8636JLY.yu.homeLibrary.cloudkit-cli` + `iCloud.yu.homeLibrary` 这一组。设置 `HOME_LIBRARY_TEST_SIMULATOR_NAME` 后，真实 live test 会在清理测试仓库前启动 app 自动化命令 `verify-repository-book`，确认模拟器 app 读取到 CLI 写入的书籍。
 
 签名模式应使用构建脚本输出的 executable 路径，而不是裸 SwiftPM 产物路径：
 
 ```bash
-CLI_BIN="$(HOME_LIBRARY_CODESIGN_IDENTITY="<Apple signing identity>" scripts/build_home_library_cloudkit.sh)"
-"$CLI_BIN" doctor
+CLI_BIN="$(HOME_LIBRARY_CODESIGN_IDENTITY="<Apple signing identity>" HOME_LIBRARY_CLOUDKIT_ENVIRONMENT=production scripts/build_home_library_cloudkit.sh)"
+HOME_LIBRARY_CLOUDKIT_ENVIRONMENT=production "$CLI_BIN" doctor
 HOME_LIBRARY_CLOUDKIT_LIVE_TESTS=1 \
 HOME_LIBRARY_CLOUDKIT_CONTAINER=iCloud.yu.homeLibrary \
+HOME_LIBRARY_CLOUDKIT_ENVIRONMENT=production \
 HOME_LIBRARY_TEST_REPOSITORY_PREFIX=AIWorkflowTest \
 HOME_LIBRARY_TEST_SIMULATOR_NAME="iPhone 17 Pro" \
 HOME_LIBRARY_REPO_ROOT="$PWD" \

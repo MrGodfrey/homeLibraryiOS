@@ -723,3 +723,47 @@
 - 更新 `README.md` 与 `skills/home-library-curator/SKILL.md`：记录真实 CloudKit live test 的签名 CLI、模拟器验证环境变量与当前测试覆盖状态。
 - 验证：`swift test` 通过，SwiftPM 测试共 `13` 项全部通过；`bash -n scripts/build_home_library_cloudkit.sh` 通过；XcodeBuildMCP `build_run_sim` 在 `iPhone 17 Pro` 模拟器上通过；签名 `doctor` 通过；真实 `run-live-test` 通过并包含 `verifySimulatorVisibility`，测试仓库已 cleanup。
 - 未读取 `markdownNote/test`；真实 workspace、CloudKit live result 与模拟器自动化结果均留在已忽略的 `.derived/AIWorkflow/` 或模拟器 data container 中；未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（补充豆瓣补书 Agent 流程并实际新增《安德的游戏》）
+
+- 更新 `AGENTS.md`：新增家庭书库 AI 管理流程，明确通过 ISBN 在豆瓣定位图书条目、将网页 / metadata / 封面 / patch / apply result 放入 `.derived/AIWorkflow/` 临时缓存、通过 `home-library-cloudkit` CLI validate / apply，并禁止提交真实账号、token、snapshot、patch 或封面缓存。
+- 使用豆瓣 ISBN 搜索与条目页 `https://book.douban.com/subject/26767247/` 整理《安德的游戏》信息：作者 `[美] 奥森·斯科特·卡德`、译者 `李毅`、出版社 `浙江文艺出版社`、出版年 `2016-6`、ISBN `9787533944940`，并下载条目封面到已忽略缓存目录。
+- 生成并验证 `createBook` patch：目标仓库为 `homeLibrary`，地点为 `location.chengdu`，验证结果 `acceptedCount = 1`、`needsReviewCount = 0`、`conflictCount = 0`、`failedCount = 0`。
+- 应用 patch 到真实 CloudKit 仓库成功：新增书籍 ID `039c82ba-06b4-4146-825c-2c04dbe42758`，封面 asset ID `cover-2f0a647d21b8a2ee8de32167f4f576ae62779f6786569232fe37317243ed2ed0`。
+- 复查 `repos` 显示 `homeLibrary` 书籍数为 `110`；重新导出的 workspace 中可检索到 ISBN `9787533944940` 与书名《安德的游戏》。
+- 用户已在 `iPhone 17 Pro` 模拟器中刷新并确认新书可见；后续自动化轮询因此停止。
+- 未读取 `markdownNote/test`；豆瓣缓存、workspace、patch、validation 和 apply result 均保留在已忽略的 `.derived/AIWorkflow/` 下，未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（修正 CLI CloudKit Production / Development 环境混用）
+
+- 复核实体 iPhone 与 CLI 数据不一致问题：原签名 CLI entitlement 中包含 `com.apple.developer.icloud-container-development-container-identifiers = iCloud.yu.homeLibrary`，因此读写的是 CloudKit Development 环境；实体发布版 iPhone 使用的是 Production 环境。
+- 调整 `scripts/build_home_library_cloudkit.sh`：签名构建默认使用 `HOME_LIBRARY_CLOUDKIT_ENVIRONMENT=production`，写入 `com.apple.developer.icloud-container-environment = Production`，并移除 development container entitlement；只有显式设置 `HOME_LIBRARY_CLOUDKIT_ENVIRONMENT=development` 时才保留 development container entitlement。
+- 扩展 `home-library-cloudkit doctor`：输出 `iCloudContainerEnvironments`、`iCloudDevelopmentContainerIdentifiers`、`expectedICloudContainerEnvironment` 和 `hasExpectedCloudKitEnvironment`，并将真实模式 ok 条件收紧为必须匹配预期 CloudKit environment。
+- 更新 `AGENTS.md`、`README.md` 与 `skills/home-library-curator/SKILL.md`：明确用户真实书库必须走 Production，Development 只用于显式隔离测试；签名 CLI wrapper 会原地重建，不要并行运行多个带签名身份的 CLI 构建 / 命令。
+- 验证 Production 只读结果：`doctor` 显示 `environment = Production`、`iCloudContainerEnvironments = ["Production"]`、`iCloudDevelopmentContainerIdentifiers = []`；`repos` 显示实体 iPhone 对应仓库 `家藏万卷`，`bookCount = 117`、`locationCount = 2`，地点包含 `成都` 和 `重庆`。
+- 将《安德的游戏》重新应用到 Production 仓库：Production validate 通过，`acceptedCount = 1`、`conflictCount = 0`、`failedCount = 0`；Production apply 成功，新增书籍 ID `d6d094ea-738a-4c71-abd3-20aba9d7b0b9`，封面 asset ID `cover-2f0a647d21b8a2ee8de32167f4f576ae62779f6786569232fe37317243ed2ed0`。
+- 复查 Production `repos` 显示 `bookCount = 118`；重新导出的 Production workspace 可检索到 ISBN `9787533944940`、书名《安德的游戏》和书籍 ID `d6d094ea-738a-4c71-abd3-20aba9d7b0b9`。
+- Development 环境中此前误加的一份《安德的游戏》未删除，避免未经明确确认执行删除操作；该记录不影响实体发布版 iPhone 的 Production 数据。
+- 验证：`bash -n scripts/build_home_library_cloudkit.sh` 通过；`swift test` 通过，SwiftPM 测试共 `13` 项全部通过；Production signed `doctor` 与 `repos` 通过。
+- 未读取 `markdownNote/test`；Production / Development workspace、patch、validation、apply result 和豆瓣缓存均保留在已忽略的 `.derived/AIWorkflow/` 下，未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（批量从豆瓣 ISBN 新增 9 本书到 Production 成都）
+
+- 按用户提供的 9 个 ISBN，从豆瓣 ISBN 搜索与豆瓣条目页缓存 metadata 和封面到 `.derived/AIWorkflow/douban-batch-*` 临时目录。
+- 目标仓库为 Production `家藏万卷`，地点统一为 `成都`（`locationID = chengdu`）；执行前 `repos` 显示 `bookCount = 118`、`locationCount = 2`。
+- 当前 Production 快照查重确认 9 个 ISBN 均不存在。
+- 生成批量 `createBook` patch 并验证通过：`acceptedCount = 9`、`needsReviewCount = 0`、`conflictCount = 0`、`failedCount = 0`。
+- 应用 patch 到 Production 成功：`appliedCount = 9`、`conflictCount = 0`、`failedCount = 0`、`retryableFailedCount = 0`。
+- 新增书籍：
+  - `9787100013239`：《哥德尔、艾舍尔、巴赫》
+  - `9787573922274`：《哈萨比斯：谷歌AI之脑》
+  - `9787522333977`：《奇点更近》
+  - `9787115644053`：《理解图灵》
+  - `9787521770162`：《英伟达之道》
+  - `9787521777680`：《AI文明史·前史》
+  - `9787513361606`：《人比AI凶》
+  - `9787500181699`：《智能简史》
+  - `9787521765502`：《教育新语》
+- 复查 Production `repos` 显示 `bookCount = 127`；重新导出的 Production workspace 可检索到上述 9 个 ISBN 和对应书籍 ID。
+- `9787521765502` 的豆瓣搜索页因限频未返回条目列表，改用公开搜索结果定位豆瓣 subject `36873315` 后缓存条目页。
+- 未读取 `markdownNote/test`；豆瓣页面、封面、workspace、patch、validation 和 apply result 均保留在已忽略的 `.derived/AIWorkflow/` 下，未提交真实账号、snapshot、patch、token 或 Apple ID 信息。

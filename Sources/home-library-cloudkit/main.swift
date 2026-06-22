@@ -62,9 +62,13 @@ private struct CLI {
         let containerID = options.value("container") ??
             ProcessInfo.processInfo.environment["HOME_LIBRARY_CLOUDKIT_CONTAINER"] ??
             HomeLibraryCloudKitConstants.defaultContainerIdentifier
+        let expectedCloudKitEnvironment = expectedCloudKitEnvironment()
         let derivedIgnored = isIgnored(".derived")
         let markdownTestIgnored = isIgnored("markdownNote/test")
-        let entitlements = codesignEntitlementsSummary(expectedContainerID: containerID)
+        let entitlements = codesignEntitlementsSummary(
+            expectedContainerID: containerID,
+            expectedCloudKitEnvironment: expectedCloudKitEnvironment
+        )
         let provisioning = provisioningProfileDiagnostics(
             codesign: entitlements,
             containerID: containerID
@@ -93,6 +97,7 @@ private struct CLI {
             accountAvailable &&
             entitlements.hasCloudKitEntitlement &&
             entitlements.hasContainerIdentifier &&
+            entitlements.hasExpectedCloudKitEnvironment &&
             provisioning.installedProfileReady
         )
 
@@ -100,7 +105,7 @@ private struct CLI {
             ok: ok,
             bundleID: HomeLibraryCloudKitConstants.defaultBundleIdentifier,
             containerID: containerID,
-            environment: ProcessInfo.processInfo.environment["HOME_LIBRARY_CLOUDKIT_ENVIRONMENT"] ?? "default",
+            environment: expectedCloudKitEnvironment,
             accountStatus: "\(accountStatus)",
             canAccessPrivateDatabase: ok,
             canAccessSharedDatabase: ok,
@@ -803,7 +808,10 @@ private struct CLI {
             .contains(path)
     }
 
-    private func codesignEntitlementsSummary(expectedContainerID: String) -> CodesignDiagnostics {
+    private func codesignEntitlementsSummary(
+        expectedContainerID: String,
+        expectedCloudKitEnvironment: String
+    ) -> CodesignDiagnostics {
         let executable = CommandLine.arguments.first ?? ""
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
@@ -818,6 +826,8 @@ private struct CLI {
             let entitlements = parsePropertyList(data)
             let services = stringListEntitlement("com.apple.developer.icloud-services", in: entitlements)
             let containers = stringListEntitlement("com.apple.developer.icloud-container-identifiers", in: entitlements)
+            let developmentContainers = stringListEntitlement("com.apple.developer.icloud-container-development-container-identifiers", in: entitlements)
+            let environments = stringListEntitlement("com.apple.developer.icloud-container-environment", in: entitlements)
             let applicationIdentifier = (entitlements["application-identifier"] as? String) ??
                 (entitlements["com.apple.application-identifier"] as? String)
             let teamIdentifier = entitlements["com.apple.developer.team-identifier"] as? String
@@ -827,8 +837,12 @@ private struct CLI {
                 teamIdentifier: teamIdentifier,
                 iCloudServices: services,
                 iCloudContainerIdentifiers: containers,
+                iCloudDevelopmentContainerIdentifiers: developmentContainers,
+                iCloudContainerEnvironments: environments,
+                expectedICloudContainerEnvironment: expectedCloudKitEnvironment,
                 hasCloudKitEntitlement: services.contains("CloudKit") || services.contains("*"),
                 hasContainerIdentifier: containers.contains(expectedContainerID),
+                hasExpectedCloudKitEnvironment: environments.contains(expectedCloudKitEnvironment),
                 readable: process.terminationStatus == 0
             )
         } catch {
@@ -838,11 +852,20 @@ private struct CLI {
                 teamIdentifier: nil,
                 iCloudServices: [],
                 iCloudContainerIdentifiers: [],
+                iCloudDevelopmentContainerIdentifiers: [],
+                iCloudContainerEnvironments: [],
+                expectedICloudContainerEnvironment: expectedCloudKitEnvironment,
                 hasCloudKitEntitlement: false,
                 hasContainerIdentifier: false,
+                hasExpectedCloudKitEnvironment: false,
                 readable: false
             )
         }
+    }
+
+    private func expectedCloudKitEnvironment() -> String {
+        let rawValue = ProcessInfo.processInfo.environment["HOME_LIBRARY_CLOUDKIT_ENVIRONMENT"]?.nilIfEmpty ?? "production"
+        return rawValue.caseInsensitiveCompare("development") == .orderedSame ? "Development" : "Production"
     }
 
     private func provisioningProfileDiagnostics(
@@ -991,6 +1014,13 @@ private struct CLI {
         if !codesign.hasContainerIdentifier {
             warnings.append("current executable does not expose the expected iCloud container entitlement")
         }
+        if !codesign.hasExpectedCloudKitEnvironment {
+            warnings.append("current executable is not signed for CloudKit \(codesign.expectedICloudContainerEnvironment)")
+        }
+        if codesign.expectedICloudContainerEnvironment == "Production",
+           !codesign.iCloudDevelopmentContainerIdentifiers.isEmpty {
+            warnings.append("current executable still exposes CloudKit development container identifiers")
+        }
         if !provisioning.installedProfileReady {
             warnings.append("no installed macOS provisioning profile matches the CLI application identifier and iCloud container")
         }
@@ -1029,8 +1059,12 @@ private struct CodesignDiagnostics: Encodable {
     var teamIdentifier: String?
     var iCloudServices: [String]
     var iCloudContainerIdentifiers: [String]
+    var iCloudDevelopmentContainerIdentifiers: [String]
+    var iCloudContainerEnvironments: [String]
+    var expectedICloudContainerEnvironment: String
     var hasCloudKitEntitlement: Bool
     var hasContainerIdentifier: Bool
+    var hasExpectedCloudKitEnvironment: Bool
     var readable: Bool
 }
 
