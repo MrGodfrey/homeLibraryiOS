@@ -767,3 +767,11 @@
 - 复查 Production `repos` 显示 `bookCount = 127`；重新导出的 Production workspace 可检索到上述 9 个 ISBN 和对应书籍 ID。
 - `9787521765502` 的豆瓣搜索页因限频未返回条目列表，改用公开搜索结果定位豆瓣 subject `36873315` 后缓存条目页。
 - 未读取 `markdownNote/test`；豆瓣页面、封面、workspace、patch、validation 和 apply result 均保留在已忽略的 `.derived/AIWorkflow/` 下，未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+
+## 2026-06-22（README 补充 AI 辅助补书能力）
+
+- 更新 `README.md` 的产品说明：当前版本已包含 AI 辅助补书能力，用户给出书名或 ISBN 后，AI 可以读取 Production 书库快照、从豆瓣搜索和条目页整理作者 / 译者 / 出版社 / 出版年 / ISBN / 封面，并通过结构化 patch 加入当前书库。
+- 在用户接口章节新增 `AI 辅助补书` 小节，说明 `.derived/AIWorkflow/` 临时缓存、`.homelibpatch`、`validate-patch`、签名 `home-library-cloudkit` CLI、Production CloudKit 写入和写入后复查的边界。
+- 调整“明确不做”的表述：仍不做扫码录入或无边界抓取电商资料，但允许在用户明确给出书名或 ISBN 后执行可校验的 AI 补全流程。
+- 本次仅更新 README 和日志，未读取 `markdownNote/test`，未提交真实账号、snapshot、patch、token 或 Apple ID 信息。
+- 同步修正 README 开头的当前版本聚焦数量，使 AI 辅助补书进入概述后文案保持一致。
