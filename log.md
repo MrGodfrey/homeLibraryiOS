@@ -390,3 +390,148 @@
 
 - 记录应用版本号维护位置：用户可见版本号在 `homeLibrary.xcodeproj/project.pbxproj` 的 `homeLibrary` target Debug / Release 配置中，字段为 `MARKETING_VERSION`；构建号在同一位置，字段为 `CURRENT_PROJECT_VERSION`。
 - 本次一并纳入当前工作区已有的版本号调整：`MARKETING_VERSION = 1.2.2`。
+
+## 2026-06-22（AI 自动管理方案计划）
+
+- 新增 `markdownNote/添加一个 AI 自动管理的功能/plan.md`，完整记录 AI 整理模式方案：以 iPhone app 作为 CloudKit 数据网关，Mac/Codex 通过局域网读取快照、生成结构化 patch，并由 app 预览确认后应用。
+- 计划中明确 App Store 合规边界：不下载或执行外部代码、不开放无确认写库、本地网络会话需用户手动开启并使用一次性 token。
+- 方案拆分为 AI patch 数据协议、局域网 API、iPhone 预览确认 UI、Codex skill、ZIP 导入闭环和测试验收等阶段。
+
+### 验证记录
+
+- 本次仅更新方案文档与变更记录，未改动应用代码。
+
+## 2026-06-22（Mac App 导入 AI Patch 方案补记）
+
+- 确认 `markdownNote/添加一个 AI 自动管理的功能/mac.md` 已写入完整 Mac App 导入 `.homelibpatch` 方案，作为替代 iPhone 本地 HTTP 接口的推荐方向。
+- 该方案强调产品能力是本地文件导入与 CloudKit 写入，不在用户可见功能或审核说明中描述 Computer Use、本地 server 或 token。
+
+### 验证记录
+
+- 本次仅更新方案文档与变更记录，未改动应用代码。
+
+## 2026-06-22（新增 Mac App 导入 AI Patch 方案）
+
+- 新增 `markdownNote/添加一个 AI 自动管理的功能/mac.md`，记录更推荐的 Mac App 导入 `.homelibpatch` 方案：Codex 在本地生成 patch 文件，Mac App 通过标准文件导入 UI 校验并写入 CloudKit。
+- 方案明确不在产品能力中暴露 Computer Use、本地 HTTP server 或 token；Computer Use 只作为用户本机自动化操作 Mac App 标准 UI 的方式。
+- 补充 patch 文件格式、封面缩略图压缩约束、macOS target 拆分、文件类型注册、Apply 行为、审核说明、最小可交付范围和测试计划。
+
+### 验证记录
+
+- 本次仅更新方案文档与变更记录，未改动应用代码。
+
+## 2026-06-22（AI 自动管理方案补充封面压缩要求）
+
+- 更新 `markdownNote/添加一个 AI 自动管理的功能/plan.md`：第一版 AI patch 新增书籍必须携带封面缩略图，封面由 Codex 在 Mac 端下载、裁剪并大幅压缩后提交。
+- 明确封面只作为 iOS 小略缩图使用：推荐 `160 x 240 px`、长边硬上限 `300 px`、目标不超过 `30 KB`、单张硬上限 `60 KB`，不传原始大图。
+- 补充 `updateBookCover` 操作，用于给已有但缺封面的书籍补压缩封面；已有封面替换必须进入确认流程。
+- 同步补充 snapshot、Codex skill、Store 应用规则、测试计划、风险缓解和第一版 MVP 范围中的封面压缩约束。
+
+### 验证记录
+
+- 本次仅更新方案文档与变更记录，未改动应用代码。
+
+## 2026-06-22（AI 自动管理方案简化为 Codex 直接 apply）
+
+- 更新 `markdownNote/添加一个 AI 自动管理的功能/plan.md`：AI 整理模式改为 Codex 专用本地控制接口，不再要求接口人类可读，也不在 iPhone app 内做 patch 预览、逐条勾选或二次确认。
+- 局域网 API 改为 `GET /library/snapshot`、可选 `POST /patch/validate` 和直接写入的 `POST /patch/apply`，由 app 校验后通过现有 `LibraryStore.saveBook` 链路写入 CloudKit。
+- 写入安全规则同步调整：保留一次性 token、短时前台会话、schema 校验、请求体限制、`expectedUpdatedAt` 冲突检测、非空字段默认不覆盖；必要覆盖改用 `replaceIfCurrentValue` 当前值校验。
+- 产品和测试计划同步收敛：iPhone UI 只负责启动/停止会话、展示地址 token 与最近一次 apply 摘要；Codex skill 负责生成 patch、可选 validate、直接 apply 并输出结果摘要。
+
+### 验证记录
+
+- 本次仅更新方案文档与变更记录，未改动应用代码。
+
+## 2026-06-22（Mac App 导入方案末尾补记）
+
+- `markdownNote/添加一个 AI 自动管理的功能/mac.md` 已补充 Mac App 导入 `.homelibpatch` 的完整计划，作为替代 iPhone 本地 HTTP 接口的推荐实施方向。
+- 本补记用于确保本次文档修改在 `log.md` 末尾也有追加记录；未删除或覆盖既有日志历史。
+
+### 验证记录
+
+- 本次仅更新方案文档与变更记录，未改动应用代码。
+
+## 2026-06-22（Mac App 升级为完整 AI 工作流客户端）
+
+- 重写 `markdownNote/添加一个 AI 自动管理的功能/mac.md`：从极小 patch 导入器升级为完整 Mac companion app 方案，覆盖书库浏览器、书籍编辑器、缺失项筛选、重复候选、AI 工作区、工作包导出和 patch apply。
+- 明确 Mac App 是同一 CloudKit 书库的 macOS 客户端，而不是 iPhone app 的远程控制器；Codex 主要通过 `AIWorkspace.zip` 和 `.homelibpatch` 文件完成 workflow，Computer Use 只操作标准 Mac UI。
+- 补充 CloudKit 原生同步与冲突处理：record zone change token、apply 前强制刷新、`ifServerRecordUnchanged` 保存策略、`serverRecordChanged` 冲突、共享权限、删除、地点失效、重复 ISBN 和幂等处理。
+- 补充 Mac target 权限、签名、Production CloudKit 环境、测试计划和实施顺序。
+
+### 验证记录
+
+- 本次仅更新方案文档与变更记录，未改动应用代码。
+
+## 2026-06-22（补充 Mac App CloudKit 测试计划与测试账号规则）
+
+- 扩展 `markdownNote/添加一个 AI 自动管理的功能/mac.md` 的测试计划：拆分为不联网单测、memory remote 集成测试、CloudKit live preflight、CloudKit live 测试、冲突场景、macOS UI 测试和 Codex 自动化验收。
+- 明确测试账号安全规则：`markdownNote/test` 只作为本地忽略文件，不读取、不打印、不写入日志、fixture、workspace 或提交内容；自动化测试不尝试自动登录 Apple ID。
+- 补充测试数据隔离与清理策略：live test 使用 `AIWorkflowTest-*` 测试仓库，生成物默认写入已忽略的 `.derived/AIWorkflow/`，结束后清理 CloudKit 测试数据。
+- 补充完整 CloudKit 能力验证范围：owner 仓库、增量 change token、iPhone 17 Pro 模拟器跨端可见性、`serverRecordChanged` 冲突、partial failure、权限失败、网络重试和重复 apply 幂等。
+
+### 验证记录
+
+- `git check-ignore -v markdownNote/test` 确认测试账号文件已被 `.gitignore` 忽略。
+- 本次仅更新方案文档与变更记录，未改动应用代码。
+
+## 2026-06-22（CloudKit CLI AI 工作流方案）
+
+- 重写 `markdownNote/添加一个 AI 自动管理的功能/Cloudkit.md`：将方案收敛为 signed macOS Swift CLI `home-library-cloudkit`，通过原生 CloudKit framework 访问同一 iCloud container，不再需要 Mac UI 或 iPhone 本地接口。
+- 明确可行性边界：CLI 必须带正确 Team、bundle identifier、CloudKit entitlement、container identifier 和 Production environment；Web Services / CloudKit JS 不作为 private/shared 书库主写入路径，`cktool` 只作为诊断和测试辅助。
+- 补充 CLI 命令设计：`doctor`、`repos`、`snapshot`、`missing`、`duplicates`、`export-ai-workspace`、`validate-patch`、`apply-patch`，并规定 stdout 输出 JSON、stderr 输出进度、错误使用非 0 exit code。
+- 补充 patch 格式、封面压缩、CloudKit 原生冲突处理、AI 工作流、测试账号安全、默认单测、memory remote、CloudKit live 和 Codex 验收计划。
+
+### 验证记录
+
+- 本次仅更新方案文档与变更记录，未改动应用代码。
+
+## 2026-06-22（CloudKit CLI 最终产品计划：本地确认页与 Codex Skill）
+
+- 再次重写 `markdownNote/添加一个 AI 自动管理的功能/Cloudkit.md`：最终方案明确为自研 signed Swift CLI + Codex Skill，Mac 与 iPhone 使用同一 iCloud 账号和同一 CloudKit container 时，CLI 写入会同步到 iPhone。
+- 移除 Web Services / cktool 作为方案组成部分的叙述，产品边界收敛到 `home-library-cloudkit` 白名单 CLI 命令和 `home-library-curator` Codex Skill。
+- 新增本地确认页设计：`review-patch` 只绑定 `127.0.0.1`，生成一次性 token 链接，在浏览器展示新增、修改、删除、封面和冲突项；用户 Approve 后 CLI 才执行高风险操作。
+- 扩展 patch 操作到新增、更新字段、更新封面和软删除书籍；删除、替换非空字段、替换已有封面、大批量新增必须经过本地确认页批准。
+- 补充 Codex Skill 的职责、规则、工作流、测试计划、Skill 交付文件和本地确认页测试要求。
+
+### 验证记录
+
+- 本次仅更新方案文档与变更记录，未改动应用代码。
+
+## 2026-06-22（CloudKit CLI 封面实现对齐）
+
+- 更新 `markdownNote/添加一个 AI 自动管理的功能/Cloudkit.md`：补充与当前 App 实现对齐的封面数据模型，明确书籍只保存 `coverAssetID`，CloudKit 使用 `coverAsset` / `CKAsset` 保存封面二进制，本地 cache 使用 `covers/<coverAssetID>.bin`。
+- 修正封面压缩规则：CLI 必须复用 `LibraryCoverCompressor.compressIfNeeded`，按当前最长边 `720 px`、目标 `220 KB`、JPEG 质量阶梯 `0.82` 到 `0.42` 的实现处理候选封面，不再使用 `160 x 240 px` / `30 KB` 的独立规则。
+- 补充 `coverAssetID` 生成和校验要求：基于最终写入数据 SHA-256 生成 `cover-<hex>`，patch 中的候选封面只作为输入，实际写入结果以 CLI 压缩后的数据为准。
+- 新增 `removeBookCover` patch 操作，并修正删除书籍语义为按现有 App 删除 CloudKit `book.<id>` record；替换或移除已有封面必须经过本地确认页。
+- 对齐当前 container、测试入口和冲突 metadata：使用 `iCloud.yu.homeLibrary`，CloudKit live 测试入口为 `HOME_LIBRARY_CLOUDKIT_LIVE_TESTS=1`，并注明 CLI 需要额外保留 `recordChangeTag` 或扩展 snapshot 类型。
+
+### 验证记录
+
+- 已检查 `homeLibrary/Book.swift`、`homeLibrary/LibraryStore.swift`、`homeLibrary/LibrarySync.swift`、`homeLibrary/LibraryPersistence.swift`、`homeLibrary/LibraryCoverCompression.swift` 以及相关测试，确认封面存储、压缩、导入导出和删除语义。
+- `rg` 确认 `Cloudkit.md` 中不再残留旧的 `160 x 240 px`、`30 KB`、`60 KB`、`compressedThumbnail` 等封面规则；“软删除”仅保留在说明现有删除不是软删除的语句中。
+- 未读取 `markdownNote/test`；本次仅更新方案文档与变更记录，未改动应用代码。
+
+## 2026-06-22（CloudKit CLI 改为真实 iCloud 账号测试）
+
+- 更新 `markdownNote/添加一个 AI 自动管理的功能/Cloudkit.md`：CloudKit live 测试不再要求配置单独测试 Apple ID，改为使用当前 Mac 系统已登录的真实 iCloud 账号。
+- 明确 iPhone 或 `iPhone 17 Pro` 模拟器需要登录同一个真实 iCloud 账号，才能验证 CLI 写入后的跨端同步。
+- 调整开源安全规则：不提交 Apple ID、邮箱、密码、验证码、恢复密钥或账号说明；`markdownNote/test` 只作为遗留本机说明文件处理，如果存在仍必须 git ignored，且 Skill / CLI / 测试都不读取。
+- 保留数据隔离和风险边界：live test 默认使用 `AIWorkflowTest-*` 独立测试仓库；对真实主书库执行修改前必须先导出 workspace / backup，并通过 `review-patch` 确认高风险操作。
+
+### 验证记录
+
+- 本次仅更新方案文档与变更记录，未改动应用代码。
+- 未读取 `markdownNote/test`。
+
+## 2026-06-22（补充无人值守 Goal 模式目标）
+
+- 新增 `markdownNote/添加一个 AI 自动管理的功能/goal.md` 的完整目标说明，用于启动 Goal mode 后无人值守开发 `home-library-cloudkit` CLI 和 `home-library-curator` Codex Skill。
+- 根据 OpenAI Codex manual 中 Goal mode、prompting、approval / sandbox、non-interactive mode、auto-review 等建议，明确 goal 文本需要可判定完成标准，长说明放入文件，并要求运行期间不等待人工确认。
+- 将人工确认路径改为自动化工程路径：review page 通过 loopback HTTP test client 或测试用 `ReviewDecision.json` 覆盖，CloudKit live 测试使用 `AIWorkflowTest-*` 独立仓库，主书库高风险操作仍需导出和确认机制保护。
+- 补充无人值守完成标准：CLI 构建、命令 JSON 输出、workspace export、patch validate/apply、封面管理、review server、memory tests、CloudKit live tests、iPhone / 模拟器同步验证、Skill 交付、README 和日志更新、安全检查全部完成后才能结束 goal。
+
+### 验证记录
+
+- 已通过 OpenAI Codex manual 本地缓存读取 Goal mode、approval / sandbox、non-interactive mode 和 auto-review 相关段落。
+- 本次仅更新方案文档与变更记录，未改动应用代码。
+- 未读取 `markdownNote/test`。
